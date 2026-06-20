@@ -1,0 +1,46 @@
+const ROLES = Object.freeze({
+  SUPER_ADMIN: 'super_admin',
+  ADMIN: 'admin',
+  STUDENT: 'student',
+  PROCTOR: 'proctor',
+});
+
+const ADMIN_PERMISSIONS = Object.freeze([
+  'dashboard.view',
+  'assessment.view',
+  'assessment.create',
+  'assessment.edit',
+  'assessment.delete',
+  'assessment.duplicate',
+  'assessment.hide',
+  'assessment.reset',
+  'assessment.complete',
+  'course.view',
+  'course.create',
+  'course.edit',
+  'course.archive',
+  'student.add',
+  'student.edit',
+  'student.remove',
+  'student.credential.regenerate',
+  'proctor.add',
+  'proctor.edit',
+  'proctor.remove',
+  'library.view',
+  'library.create',
+  'library.edit',
+  'library.archive',
+  'mail.send',
+  'mail.logs.view',
+  'reports.view',
+  'reports.export',
+  'ufm.view',
+  'ufm.reverse',
+  'settings.manage',
+  'audit.view',
+]);
+
+module.exports = {
+  ROLES,
+  ADMIN_PERMISSIONS,
+};
