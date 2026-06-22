@@ -1,6 +1,4 @@
 import { useEffect, useRef, useState } from 'react';
-import { gsap } from 'gsap';
-import { ScrollTrigger } from 'gsap/ScrollTrigger';
 
 const FRAME_COUNT = 50;
 const INITIAL_BUFFER = 12;
@@ -11,8 +9,6 @@ const frameUrls = Array.from(
 
 const clamp = (value, minimum, maximum) => Math.min(Math.max(value, minimum), maximum);
 
-gsap.registerPlugin(ScrollTrigger);
-
 export function ElvoraSequence() {
   const sectionRef = useRef(null);
   const canvasRef = useRef(null);
@@ -22,6 +18,7 @@ export function ElvoraSequence() {
   const displayedFrameRef = useRef(0);
   const renderedFrameRef = useRef(-1);
   const renderRafRef = useRef(0);
+  const syncRafRef = useRef(0);
   const [loadProgress, setLoadProgress] = useState(0);
   const [isReady, setIsReady] = useState(false);
 
@@ -40,6 +37,7 @@ export function ElvoraSequence() {
     let backgroundTimer = 0;
     let viewportWidth = 1;
     let viewportHeight = 1;
+    let hasInitialProgressSync = false;
 
     const closestLoaded = (requested) => {
       if (loadedImages.has(requested)) return requested;
@@ -99,6 +97,10 @@ export function ElvoraSequence() {
     const applyProgress = (progressValue) => {
       const progress = clamp(progressValue, 0, 1);
       const frame = progress * (FRAME_COUNT - 1);
+      if (!hasInitialProgressSync) {
+        displayedFrameRef.current = frame;
+        hasInitialProgressSync = true;
+      }
       targetFrameRef.current = frame;
       section.style.setProperty('--elvora-progress', String(progress));
       prioritize(frame);
@@ -108,7 +110,7 @@ export function ElvoraSequence() {
     const updateFromNativeScroll = () => {
       const totalScrollableDistance = Math.max(1, section.offsetHeight - window.innerHeight);
       const sectionTop = section.getBoundingClientRect().top;
-      applyProgress(clamp(-sectionTop / totalScrollableDistance, 0, 1));
+      applyProgress(-sectionTop / totalScrollableDistance);
     };
 
     const loadFrame = (index) => {
@@ -187,41 +189,33 @@ export function ElvoraSequence() {
       }
     };
 
-    const sequenceTrigger = reducedMotion.matches ? null : ScrollTrigger.create({
-      trigger: section,
-      start: 'top top',
-      end: 'bottom bottom',
-      invalidateOnRefresh: true,
-      onUpdate: (self) => applyProgress(self.progress),
-    });
+    const syncProgress = () => {
+      if (cancelled || reducedMotion.matches) return;
+      updateFromNativeScroll();
+      syncRafRef.current = window.requestAnimationFrame(syncProgress);
+    };
 
     const resizeObserver = new window.ResizeObserver(resize);
     resizeObserver.observe(canvas);
     const onResize = () => {
       resize();
       updateFromNativeScroll();
-      ScrollTrigger.refresh();
     };
-    const onScroll = () => updateFromNativeScroll();
     window.addEventListener('resize', onResize, { passive: true });
-    window.addEventListener('scroll', onScroll, { passive: true });
     window.visualViewport?.addEventListener('resize', onResize, { passive: true });
 
     resize();
+    updateFromNativeScroll();
     loadSequence();
-    window.requestAnimationFrame(() => {
-      updateFromNativeScroll();
-      ScrollTrigger.refresh();
-    });
+    if (!reducedMotion.matches) syncRafRef.current = window.requestAnimationFrame(syncProgress);
 
     return () => {
       cancelled = true;
       window.cancelAnimationFrame(renderRafRef.current);
+      window.cancelAnimationFrame(syncRafRef.current);
       window.clearTimeout(backgroundTimer);
-      sequenceTrigger?.kill();
       resizeObserver.disconnect();
       window.removeEventListener('resize', onResize);
-      window.removeEventListener('scroll', onScroll);
       window.visualViewport?.removeEventListener('resize', onResize);
       pendingRequests.clear();
       loadedImages.clear();

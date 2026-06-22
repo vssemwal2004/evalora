@@ -56,6 +56,11 @@ export function LandingPage() {
 
   useEffect(() => {
     const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const emitLandingScroll = (scrollValue) => {
+      window.dispatchEvent(new window.CustomEvent('elvora:landing-scroll', {
+        detail: { scroll: Number.isFinite(scrollValue) ? scrollValue : window.scrollY || window.pageYOffset || 0 },
+      }));
+    };
     const lenis = reducedMotion ? null : new Lenis({
       duration: 1.12,
       easing: (value) => Math.min(1, 1.001 - 2 ** (-10 * value)),
@@ -64,9 +69,14 @@ export function LandingPage() {
       touchMultiplier: 1,
       anchors: true,
     });
-    const updateScrollTrigger = () => ScrollTrigger.update();
+    const updateScrollTrigger = (event) => {
+      ScrollTrigger.update();
+      emitLandingScroll(event?.scroll);
+    };
     const updateLenis = (time) => lenis?.raf(time * 1000);
     lenis?.on('scroll', updateScrollTrigger);
+    const onNativeScroll = () => emitLandingScroll(window.scrollY || window.pageYOffset || 0);
+    window.addEventListener('scroll', onNativeScroll, { passive: true });
     if (lenis) {
       gsap.ticker.add(updateLenis);
       gsap.ticker.lagSmoothing(0);
@@ -103,13 +113,17 @@ export function LandingPage() {
       return { card, move, leave };
     });
 
-    window.requestAnimationFrame(() => ScrollTrigger.refresh());
+    window.requestAnimationFrame(() => {
+      emitLandingScroll(window.scrollY || window.pageYOffset || 0);
+      ScrollTrigger.refresh();
+    });
     return () => {
       observer.disconnect();
       cardListeners.forEach(({ card, move, leave }) => {
         card.removeEventListener('pointermove', move);
         card.removeEventListener('pointerleave', leave);
       });
+      window.removeEventListener('scroll', onNativeScroll);
       lenis?.off('scroll', updateScrollTrigger);
       lenis?.destroy();
       gsap.ticker.remove(updateLenis);
