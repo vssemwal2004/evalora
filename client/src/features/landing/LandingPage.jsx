@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { ArrowRight, BookOpenCheck, Building2, GraduationCap, ScanFace, ShieldCheck, Workflow } from 'lucide-react';
+import { ArrowRight, BookOpenCheck, Building2, GraduationCap } from 'lucide-react';
 import { Link, Navigate } from 'react-router-dom';
 import '@fontsource/manrope/latin-400.css';
 import '@fontsource/manrope/latin-600.css';
@@ -8,6 +8,7 @@ import '@fontsource/manrope/latin-800.css';
 import { useAuth } from '../auth/AuthContext.jsx';
 import { BrandLoader } from '../../ui/BrandLoader.jsx';
 import { ElvoraSequence } from './ScrollSequenceHero.jsx';
+import { EcosystemSection } from './EcosystemSection.jsx';
 
 const roleHome = {
   super_admin: '/super-admin',
@@ -17,12 +18,6 @@ const roleHome = {
   proctor: '/proctor',
   student: '/student',
 };
-
-const capabilities = [
-  { icon: ScanFace, number: '01', title: 'AI Proctoring', text: 'Live integrity signals with a focused exam experience.' },
-  { icon: Workflow, number: '02', title: 'Connected Workflow', text: 'Create, assign, review, and publish from one platform.' },
-  { icon: ShieldCheck, number: '03', title: 'Secure by Design', text: 'Role-based access and controlled assessment delivery.' },
-];
 
 const workflowSteps = [
   ['Create', 'Build assessments and reusable question libraries.'],
@@ -103,21 +98,7 @@ export function LandingPage() {
       <main>
         <ElvoraSequence />
 
-        <section className="elvora-page-section elvora-capabilities" aria-labelledby="capabilities-title">
-          <div className="elvora-section-heading" data-elvora-reveal>
-            <span>One intelligent platform</span>
-            <h2 id="capabilities-title">Everything behind a trusted assessment.</h2>
-          </div>
-          <div className="elvora-capability-grid">
-            {capabilities.map(({ icon: Icon, number, title, text }, index) => (
-              <article key={title} className="elvora-3d-card" data-elvora-reveal style={{ '--reveal-delay': `${index * 90}ms` }}>
-                <div className="elvora-card-topline"><Icon size={23} /><span>{number}</span></div>
-                <h3>{title}</h3>
-                <p>{text}</p>
-              </article>
-            ))}
-          </div>
-        </section>
+        <EcosystemSection />
 
         <section className="elvora-workflow-section" aria-labelledby="workflow-title">
           <div className="elvora-workflow-glow" aria-hidden="true" />

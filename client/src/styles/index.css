@@ -1225,6 +1225,9 @@ textarea {
 .elvora-sequence-canvas {
   object-fit: cover;
   object-position: center;
+  background: #f7f6f2;
+  backface-visibility: hidden;
+  transform: translateZ(0);
 }
 
 .elvora-sequence noscript img {
