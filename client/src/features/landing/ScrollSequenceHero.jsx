@@ -11,7 +11,7 @@ const clamp = (value, minimum, maximum) => Math.min(Math.max(value, minimum), ma
 
 export function ElvoraSequence() {
   const sectionRef = useRef(null);
-  const canvasRef = useRef(null);
+  const imageRef = useRef(null);
   const imagesRef = useRef(new Map());
   const requestsRef = useRef(new Map());
   const targetFrameRef = useRef(0);
@@ -24,20 +24,26 @@ export function ElvoraSequence() {
 
   useEffect(() => {
     const section = sectionRef.current;
-    const canvas = canvasRef.current;
-    if (!section || !canvas) return undefined;
+    const imageElement = imageRef.current;
+    if (!section || !imageElement) return undefined;
 
-    const context = canvas.getContext('2d', { alpha: false, desynchronized: true });
-    if (!context) return undefined;
+    renderRafRef.current = 0;
+    syncRafRef.current = 0;
 
     const loadedImages = imagesRef.current;
     const pendingRequests = requestsRef.current;
-    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
     let cancelled = false;
     let backgroundTimer = 0;
-    let viewportWidth = 1;
-    let viewportHeight = 1;
     let hasInitialProgressSync = false;
+
+    const readScrollTop = () => (
+      window.scrollY
+      ?? window.pageYOffset
+      ?? document.scrollingElement?.scrollTop
+      ?? document.documentElement.scrollTop
+      ?? document.body.scrollTop
+      ?? 0
+    );
 
     const closestLoaded = (requested) => {
       if (loadedImages.has(requested)) return requested;
@@ -48,28 +54,12 @@ export function ElvoraSequence() {
       return -1;
     };
 
-    const drawImageCover = (image) => {
-      const scale = Math.max(viewportWidth / image.naturalWidth, viewportHeight / image.naturalHeight);
-      const drawWidth = image.naturalWidth * scale;
-      const drawHeight = image.naturalHeight * scale;
-      const drawX = (viewportWidth - drawWidth) / 2;
-      const drawY = (viewportHeight - drawHeight) / 2;
-
-      context.drawImage(image, drawX, drawY, drawWidth, drawHeight);
-    };
-
     const drawFrame = (requestedIndex) => {
       const frameIndex = closestLoaded(clamp(requestedIndex, 0, FRAME_COUNT - 1));
       const image = loadedImages.get(frameIndex);
       if (!image || renderedFrameRef.current === frameIndex) return;
-
-      context.imageSmoothingEnabled = true;
-      context.imageSmoothingQuality = 'high';
-      context.save();
-      context.globalAlpha = 1;
-      context.globalCompositeOperation = 'copy';
-      drawImageCover(image);
-      context.restore();
+      if (imageElement.src !== image.src) imageElement.src = image.src;
+      imageElement.dataset.frameIndex = String(frameIndex);
       renderedFrameRef.current = frameIndex;
     };
 
@@ -103,14 +93,17 @@ export function ElvoraSequence() {
       }
       targetFrameRef.current = frame;
       section.style.setProperty('--elvora-progress', String(progress));
+      section.dataset.sequenceProgress = progress.toFixed(4);
+      section.dataset.targetFrame = frame.toFixed(2);
       prioritize(frame);
       requestRender();
     };
 
-    const updateFromNativeScroll = () => {
+    const syncProgressNow = () => {
       const totalScrollableDistance = Math.max(1, section.offsetHeight - window.innerHeight);
-      const sectionTop = section.getBoundingClientRect().top;
-      applyProgress(-sectionTop / totalScrollableDistance);
+      const scrollTop = readScrollTop();
+      const sectionTop = section.getBoundingClientRect().top + scrollTop;
+      applyProgress((scrollTop - sectionTop) / totalScrollableDistance);
     };
 
     const loadFrame = (index) => {
@@ -142,21 +135,6 @@ export function ElvoraSequence() {
       return request;
     };
 
-    const resize = () => {
-      const bounds = canvas.getBoundingClientRect();
-      const mobile = bounds.width < 768;
-      const dpr = Math.min(window.devicePixelRatio || 1, mobile ? 1.5 : 2);
-      viewportWidth = Math.max(1, Math.round(bounds.width * dpr));
-      viewportHeight = Math.max(1, Math.round(bounds.height * dpr));
-
-      if (canvas.width !== viewportWidth || canvas.height !== viewportHeight) {
-        canvas.width = viewportWidth;
-        canvas.height = viewportHeight;
-        renderedFrameRef.current = -1;
-      }
-      requestRender();
-    };
-
     const prioritize = (position) => {
       const target = Math.round(position);
       [Math.floor(position), Math.ceil(position), target - 1, target + 1, target - 2, target + 2]
@@ -178,7 +156,6 @@ export function ElvoraSequence() {
       }
       setIsReady(true);
 
-      if (reducedMotion.matches) return;
       const remaining = Array.from({ length: FRAME_COUNT }, (_, index) => index)
         .filter((index) => !loadedImages.has(index));
       for (let start = 0; start < remaining.length && !cancelled; start += 8) {
@@ -189,33 +166,43 @@ export function ElvoraSequence() {
       }
     };
 
-    const syncProgress = () => {
-      if (cancelled || reducedMotion.matches) return;
-      updateFromNativeScroll();
-      syncRafRef.current = window.requestAnimationFrame(syncProgress);
+    const requestProgressSync = () => {
+      if (cancelled || syncRafRef.current) return;
+      syncRafRef.current = window.requestAnimationFrame(() => {
+        syncRafRef.current = 0;
+        syncProgressNow();
+      });
     };
 
-    const resizeObserver = new window.ResizeObserver(resize);
-    resizeObserver.observe(canvas);
     const onResize = () => {
-      resize();
-      updateFromNativeScroll();
+      renderedFrameRef.current = -1;
+      requestProgressSync();
     };
+    const onScroll = () => requestProgressSync();
+    const onPageShow = () => requestProgressSync();
+
+    window.addEventListener('scroll', onScroll, { passive: true });
     window.addEventListener('resize', onResize, { passive: true });
+    window.addEventListener('orientationchange', onResize, { passive: true });
+    window.addEventListener('pageshow', onPageShow, { passive: true });
     window.visualViewport?.addEventListener('resize', onResize, { passive: true });
 
-    resize();
-    updateFromNativeScroll();
+    imageElement.src = frameUrls[0];
+    syncProgressNow();
     loadSequence();
-    if (!reducedMotion.matches) syncRafRef.current = window.requestAnimationFrame(syncProgress);
+    requestProgressSync();
 
     return () => {
       cancelled = true;
       window.cancelAnimationFrame(renderRafRef.current);
       window.cancelAnimationFrame(syncRafRef.current);
+      renderRafRef.current = 0;
+      syncRafRef.current = 0;
       window.clearTimeout(backgroundTimer);
-      resizeObserver.disconnect();
+      window.removeEventListener('scroll', onScroll);
       window.removeEventListener('resize', onResize);
+      window.removeEventListener('orientationchange', onResize);
+      window.removeEventListener('pageshow', onPageShow);
       window.visualViewport?.removeEventListener('resize', onResize);
       pendingRequests.clear();
       loadedImages.clear();
@@ -226,13 +213,15 @@ export function ElvoraSequence() {
     <section ref={sectionRef} id="elvora-hero" className="elvora-sequence" aria-labelledby="elvora-title">
       <div className="elvora-sequence-sticky">
         <h1 id="elvora-title" className="sr-only">Elvora AI-powered examination and academic workflow platform</h1>
-        <canvas
-          ref={canvasRef}
+        <img
+          ref={imageRef}
           className="elvora-sequence-canvas"
           aria-label="Scroll-controlled 3D visualization of the Elvora AI examination platform"
-        >
-          Elvora provides AI-powered examination, proctoring, and secure academic workflows.
-        </canvas>
+          alt=""
+          decoding="async"
+          fetchPriority="high"
+          src="/assets/elvora-hero-sequence/frame-001.webp"
+        />
 
         <div className={`elvora-sequence-loader${isReady ? ' is-ready' : ''}`} role="status" aria-live="polite">
           <img src="/logo.webp" alt="" aria-hidden="true" />

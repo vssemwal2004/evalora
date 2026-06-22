@@ -1,19 +1,13 @@
 import { useEffect } from 'react';
 import { ArrowRight, BookOpenCheck, Building2, GraduationCap, ScanFace, ShieldCheck, Workflow } from 'lucide-react';
-import Lenis from 'lenis';
-import { gsap } from 'gsap';
-import { ScrollTrigger } from 'gsap/ScrollTrigger';
 import { Link, Navigate } from 'react-router-dom';
 import '@fontsource/manrope/latin-400.css';
 import '@fontsource/manrope/latin-600.css';
 import '@fontsource/manrope/latin-700.css';
 import '@fontsource/manrope/latin-800.css';
-import 'lenis/dist/lenis.css';
 import { useAuth } from '../auth/AuthContext.jsx';
 import { BrandLoader } from '../../ui/BrandLoader.jsx';
 import { ElvoraSequence } from './ScrollSequenceHero.jsx';
-
-gsap.registerPlugin(ScrollTrigger);
 
 const roleHome = {
   super_admin: '/super-admin',
@@ -55,33 +49,6 @@ export function LandingPage() {
   const { user, isAuthenticated, isBootstrapping } = useAuth();
 
   useEffect(() => {
-    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    const emitLandingScroll = (scrollValue) => {
-      window.dispatchEvent(new window.CustomEvent('elvora:landing-scroll', {
-        detail: { scroll: Number.isFinite(scrollValue) ? scrollValue : window.scrollY || window.pageYOffset || 0 },
-      }));
-    };
-    const lenis = reducedMotion ? null : new Lenis({
-      duration: 1.12,
-      easing: (value) => Math.min(1, 1.001 - 2 ** (-10 * value)),
-      smoothWheel: true,
-      wheelMultiplier: 0.88,
-      touchMultiplier: 1,
-      anchors: true,
-    });
-    const updateScrollTrigger = (event) => {
-      ScrollTrigger.update();
-      emitLandingScroll(event?.scroll);
-    };
-    const updateLenis = (time) => lenis?.raf(time * 1000);
-    lenis?.on('scroll', updateScrollTrigger);
-    const onNativeScroll = () => emitLandingScroll(window.scrollY || window.pageYOffset || 0);
-    window.addEventListener('scroll', onNativeScroll, { passive: true });
-    if (lenis) {
-      gsap.ticker.add(updateLenis);
-      gsap.ticker.lagSmoothing(0);
-    }
-
     const elements = document.querySelectorAll('[data-elvora-reveal]');
     const observer = new window.IntersectionObserver((entries) => {
       entries.forEach((entry) => {
@@ -112,22 +79,12 @@ export function LandingPage() {
       card.addEventListener('pointerleave', leave, { passive: true });
       return { card, move, leave };
     });
-
-    window.requestAnimationFrame(() => {
-      emitLandingScroll(window.scrollY || window.pageYOffset || 0);
-      ScrollTrigger.refresh();
-    });
     return () => {
       observer.disconnect();
       cardListeners.forEach(({ card, move, leave }) => {
         card.removeEventListener('pointermove', move);
         card.removeEventListener('pointerleave', leave);
       });
-      window.removeEventListener('scroll', onNativeScroll);
-      lenis?.off('scroll', updateScrollTrigger);
-      lenis?.destroy();
-      gsap.ticker.remove(updateLenis);
-      gsap.ticker.lagSmoothing(500, 33);
     };
   }, []);
 
