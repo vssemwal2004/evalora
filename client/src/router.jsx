@@ -1,22 +1,50 @@
+import { lazy, Suspense } from 'react';
 import { createBrowserRouter, Navigate, useLocation, useParams } from 'react-router-dom';
 import { ProtectedRoute } from './features/auth/ProtectedRoute.jsx';
 import { AppShell } from './ui/AppShell.jsx';
-import { LoginPage } from './features/auth/LoginPage.jsx';
-import { DashboardPlaceholder } from './features/dashboard/DashboardPlaceholder.jsx';
-import { CreateAdminPage, ManageAdminsPage, ViewAdminsPage } from './features/super-admin/ManageAdminsPage.jsx';
-import { AssessmentOverviewPage } from './features/assessments/AssessmentOverviewPage.jsx';
-import { AssessmentReportsPage } from './features/assessments/AssessmentReportsPage.jsx';
-import { MyAssessmentsPage } from './features/assessments/MyAssessmentsPage.jsx';
-import { CreateAssessmentPage } from './features/assessments/CreateAssessmentPage.jsx';
-import { AddCoursesPage, ViewCoursesPage } from './features/courses/CoursesPage.jsx';
-import { AddLibraryQuestionsPage, LibraryFolderQuestionsPage, LibraryPage, ViewLibraryPage } from './features/library/LibraryPage.jsx';
-import { StudentExamsPage } from './features/student/StudentExamsPage.jsx';
-import { StudentAttemptPage } from './features/student/StudentAttemptPage.jsx';
-import { ProctorLivePage } from './features/proctor/ProctorLivePage.jsx';
-import { ProctorAlertsPage } from './features/proctor/ProctorAlertsPage.jsx';
-import { AssessmentStudentsPage } from './features/students/AssessmentStudentsPage.jsx';
-import { AssessmentProctorsPage } from './features/proctors/AssessmentProctorsPage.jsx';
-import { NotFoundPage } from './ui/NotFoundPage.jsx';
+import { BrandLoader } from './ui/BrandLoader.jsx';
+
+function lazyPage(importer, exportName) {
+  return lazy(() => importer().then((module) => ({ default: module[exportName] })));
+}
+
+function page(Component, props) {
+  return (
+    <Suspense fallback={<BrandLoader />}>
+      <Component {...props} />
+    </Suspense>
+  );
+}
+
+const LoginPage = lazyPage(() => import('./features/auth/LoginPage.jsx'), 'LoginPage');
+const DashboardPlaceholder = lazyPage(() => import('./features/dashboard/DashboardPlaceholder.jsx'), 'DashboardPlaceholder');
+const ManageAdminsPage = lazyPage(() => import('./features/super-admin/ManageAdminsPage.jsx'), 'ManageAdminsPage');
+const CreateAdminPage = lazyPage(() => import('./features/super-admin/ManageAdminsPage.jsx'), 'CreateAdminPage');
+const ViewAdminsPage = lazyPage(() => import('./features/super-admin/ManageAdminsPage.jsx'), 'ViewAdminsPage');
+const AssessmentOverviewPage = lazyPage(() => import('./features/assessments/AssessmentOverviewPage.jsx'), 'AssessmentOverviewPage');
+const AssessmentReportsPage = lazyPage(() => import('./features/assessments/AssessmentReportsPage.jsx'), 'AssessmentReportsPage');
+const MyAssessmentsPage = lazyPage(() => import('./features/assessments/MyAssessmentsPage.jsx'), 'MyAssessmentsPage');
+const CreateAssessmentPage = lazyPage(() => import('./features/assessments/CreateAssessmentPage.jsx'), 'CreateAssessmentPage');
+const AddCoursesPage = lazyPage(() => import('./features/courses/CoursesPage.jsx'), 'AddCoursesPage');
+const ViewCoursesPage = lazyPage(() => import('./features/courses/CoursesPage.jsx'), 'ViewCoursesPage');
+const CreateFacultyPage = lazyPage(() => import('./features/people/PeoplePage.jsx'), 'CreateFacultyPage');
+const ViewFacultyPage = lazyPage(() => import('./features/people/PeoplePage.jsx'), 'ViewFacultyPage');
+const CreateModeratorPage = lazyPage(() => import('./features/people/PeoplePage.jsx'), 'CreateModeratorPage');
+const ViewModeratorPage = lazyPage(() => import('./features/people/PeoplePage.jsx'), 'ViewModeratorPage');
+const AddLibraryQuestionsPage = lazyPage(() => import('./features/library/LibraryPage.jsx'), 'AddLibraryQuestionsPage');
+const LibraryFolderQuestionsPage = lazyPage(() => import('./features/library/LibraryPage.jsx'), 'LibraryFolderQuestionsPage');
+const LibraryPage = lazyPage(() => import('./features/library/LibraryPage.jsx'), 'LibraryPage');
+const ViewLibraryPage = lazyPage(() => import('./features/library/LibraryPage.jsx'), 'ViewLibraryPage');
+const StudentExamsPage = lazyPage(() => import('./features/student/StudentExamsPage.jsx'), 'StudentExamsPage');
+const StudentAttemptPage = lazyPage(() => import('./features/student/StudentAttemptPage.jsx'), 'StudentAttemptPage');
+const ProctorLivePage = lazyPage(() => import('./features/proctor/ProctorLivePage.jsx'), 'ProctorLivePage');
+const ProctorAlertsPage = lazyPage(() => import('./features/proctor/ProctorAlertsPage.jsx'), 'ProctorAlertsPage');
+const AssessmentStudentsPage = lazyPage(() => import('./features/students/AssessmentStudentsPage.jsx'), 'AssessmentStudentsPage');
+const AssessmentProctorsPage = lazyPage(() => import('./features/proctors/AssessmentProctorsPage.jsx'), 'AssessmentProctorsPage');
+const NotFoundPage = lazyPage(() => import('./ui/NotFoundPage.jsx'), 'NotFoundPage');
+const AssignedWorkPage = lazyPage(() => import('./features/work/AssignedWorkPage.jsx'), 'AssignedWorkPage');
+const WorkWorkspacePage = lazyPage(() => import('./features/work/AssignedWorkPage.jsx'), 'WorkWorkspacePage');
+const LandingPage = lazyPage(() => import('./features/landing/LandingPage.jsx'), 'LandingPage');
 
 function AssessmentBuilderRedirect({ step = 'basic' }) {
   const { assessmentId } = useParams();
@@ -30,11 +58,11 @@ function AssessmentBuilderRedirect({ step = 'basic' }) {
 export const router = createBrowserRouter([
   {
     path: '/',
-    element: <Navigate to="/login" replace />,
+    element: page(LandingPage),
   },
   {
     path: '/login',
-    element: <LoginPage />,
+    element: page(LoginPage),
   },
   {
     element: <ProtectedRoute roles={['super_admin']} />,
@@ -45,35 +73,35 @@ export const router = createBrowserRouter([
         children: [
           {
             index: true,
-            element: <DashboardPlaceholder title="Super Admin Dashboard" />,
+            element: page(DashboardPlaceholder, { title: 'Super Admin Dashboard' }),
           },
           {
             path: 'admins',
-            element: <ManageAdminsPage />,
+            element: page(ManageAdminsPage),
           },
           {
             path: 'admins/create',
-            element: <CreateAdminPage />,
+            element: page(CreateAdminPage),
           },
           {
             path: 'admins/view',
-            element: <ViewAdminsPage />,
+            element: page(ViewAdminsPage),
           },
           {
             path: 'assessments',
-            element: <AssessmentOverviewPage />,
+            element: page(AssessmentOverviewPage),
           },
           {
             path: 'assessments/create',
-            element: <CreateAssessmentPage />,
+            element: page(CreateAssessmentPage),
           },
           {
             path: 'assessments/reports',
-            element: <AssessmentReportsPage />,
+            element: page(AssessmentReportsPage),
           },
           {
             path: 'assessments/my',
-            element: <MyAssessmentsPage />,
+            element: page(MyAssessmentsPage),
           },
           {
             path: 'assessments/:assessmentId',
@@ -89,35 +117,51 @@ export const router = createBrowserRouter([
           },
           {
             path: 'assessments/:assessmentId/students',
-            element: <AssessmentStudentsPage />,
+            element: page(AssessmentStudentsPage),
           },
           {
             path: 'assessments/:assessmentId/proctors',
-            element: <AssessmentProctorsPage />,
+            element: page(AssessmentProctorsPage),
           },
           {
             path: 'courses/add',
-            element: <AddCoursesPage />,
+            element: page(AddCoursesPage),
           },
           {
             path: 'courses/view',
-            element: <ViewCoursesPage />,
+            element: page(ViewCoursesPage),
+          },
+          {
+            path: 'faculty/create',
+            element: page(CreateFacultyPage),
+          },
+          {
+            path: 'faculty/view',
+            element: page(ViewFacultyPage),
+          },
+          {
+            path: 'moderators/create',
+            element: page(CreateModeratorPage),
+          },
+          {
+            path: 'moderators/view',
+            element: page(ViewModeratorPage),
           },
           {
             path: 'library',
-            element: <LibraryPage />,
+            element: page(LibraryPage),
           },
           {
             path: 'library/add',
-            element: <AddLibraryQuestionsPage />,
+            element: page(AddLibraryQuestionsPage),
           },
           {
             path: 'library/view',
-            element: <ViewLibraryPage />,
+            element: page(ViewLibraryPage),
           },
           {
             path: 'library/view/questions',
-            element: <LibraryFolderQuestionsPage />,
+            element: page(LibraryFolderQuestionsPage),
           },
         ],
       },
@@ -132,23 +176,23 @@ export const router = createBrowserRouter([
         children: [
           {
             index: true,
-            element: <DashboardPlaceholder title="Admin Dashboard" />,
+            element: page(DashboardPlaceholder, { title: 'Admin Dashboard' }),
           },
           {
             path: 'assessments',
-            element: <AssessmentOverviewPage />,
+            element: page(AssessmentOverviewPage),
           },
           {
             path: 'assessments/create',
-            element: <CreateAssessmentPage />,
+            element: page(CreateAssessmentPage),
           },
           {
             path: 'assessments/reports',
-            element: <AssessmentReportsPage />,
+            element: page(AssessmentReportsPage),
           },
           {
             path: 'assessments/my',
-            element: <MyAssessmentsPage />,
+            element: page(MyAssessmentsPage),
           },
           {
             path: 'assessments/:assessmentId',
@@ -164,35 +208,51 @@ export const router = createBrowserRouter([
           },
           {
             path: 'assessments/:assessmentId/students',
-            element: <AssessmentStudentsPage />,
+            element: page(AssessmentStudentsPage),
           },
           {
             path: 'assessments/:assessmentId/proctors',
-            element: <AssessmentProctorsPage />,
+            element: page(AssessmentProctorsPage),
           },
           {
             path: 'courses/add',
-            element: <AddCoursesPage />,
+            element: page(AddCoursesPage),
           },
           {
             path: 'courses/view',
-            element: <ViewCoursesPage />,
+            element: page(ViewCoursesPage),
+          },
+          {
+            path: 'faculty/create',
+            element: page(CreateFacultyPage),
+          },
+          {
+            path: 'faculty/view',
+            element: page(ViewFacultyPage),
+          },
+          {
+            path: 'moderators/create',
+            element: page(CreateModeratorPage),
+          },
+          {
+            path: 'moderators/view',
+            element: page(ViewModeratorPage),
           },
           {
             path: 'library',
-            element: <LibraryPage />,
+            element: page(LibraryPage),
           },
           {
             path: 'library/add',
-            element: <AddLibraryQuestionsPage />,
+            element: page(AddLibraryQuestionsPage),
           },
           {
             path: 'library/view',
-            element: <ViewLibraryPage />,
+            element: page(ViewLibraryPage),
           },
           {
             path: 'library/view/questions',
-            element: <LibraryFolderQuestionsPage />,
+            element: page(LibraryFolderQuestionsPage),
           },
         ],
       },
@@ -207,15 +267,69 @@ export const router = createBrowserRouter([
         children: [
           {
             index: true,
-            element: <StudentExamsPage />,
+            element: page(StudentExamsPage),
           },
           {
             path: 'exams',
-            element: <StudentExamsPage />,
+            element: page(StudentExamsPage),
           },
           {
             path: 'exams/:assignmentId/attempt',
-            element: <StudentAttemptPage />,
+            element: page(StudentAttemptPage),
+          },
+        ],
+      },
+    ],
+  },
+  {
+    element: <ProtectedRoute roles={['faculty']} />,
+    children: [
+      {
+        path: '/faculty',
+        element: <AppShell role="faculty" />,
+        children: [
+          {
+            index: true,
+            element: page(AssignedWorkPage),
+          },
+          {
+            path: 'work/:assignmentId',
+            element: page(WorkWorkspacePage),
+          },
+          {
+            path: 'library',
+            element: page(LibraryPage),
+          },
+          {
+            path: 'library/add',
+            element: page(AddLibraryQuestionsPage),
+          },
+          {
+            path: 'library/view',
+            element: page(ViewLibraryPage),
+          },
+          {
+            path: 'library/view/questions',
+            element: page(LibraryFolderQuestionsPage),
+          },
+        ],
+      },
+    ],
+  },
+  {
+    element: <ProtectedRoute roles={['moderator']} />,
+    children: [
+      {
+        path: '/moderator',
+        element: <AppShell role="moderator" />,
+        children: [
+          {
+            index: true,
+            element: page(AssignedWorkPage),
+          },
+          {
+            path: 'work/:assignmentId',
+            element: page(WorkWorkspacePage),
           },
         ],
       },
@@ -230,15 +344,15 @@ export const router = createBrowserRouter([
         children: [
           {
             index: true,
-            element: <DashboardPlaceholder title="Proctor Monitoring Dashboard" />,
+            element: page(DashboardPlaceholder, { title: 'Proctor Monitoring Dashboard' }),
           },
           {
             path: 'live',
-            element: <ProctorLivePage />,
+            element: page(ProctorLivePage),
           },
           {
             path: 'alerts',
-            element: <ProctorAlertsPage />,
+            element: page(ProctorAlertsPage),
           },
         ],
       },
@@ -246,6 +360,6 @@ export const router = createBrowserRouter([
   },
   {
     path: '*',
-    element: <NotFoundPage />,
+    element: page(NotFoundPage),
   },
 ]);

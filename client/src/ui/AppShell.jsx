@@ -14,6 +14,7 @@ import {
   Plus,
   Shield,
   UserPlus,
+  UserRoundCog,
   Users,
   Video,
 } from 'lucide-react';
@@ -53,6 +54,24 @@ const navByRole = {
         ],
       },
       {
+        id: 'faculty',
+        label: 'Faculty',
+        icon: UserRoundCog,
+        children: [
+          { label: 'Create Faculty', to: '/super-admin/faculty/create', icon: UserPlus },
+          { label: 'View Faculty', to: '/super-admin/faculty/view', icon: ListChecks },
+        ],
+      },
+      {
+        id: 'moderators',
+        label: 'Moderators',
+        icon: Shield,
+        children: [
+          { label: 'Create Moderator', to: '/super-admin/moderators/create', icon: UserPlus },
+          { label: 'View Moderators', to: '/super-admin/moderators/view', icon: ListChecks },
+        ],
+      },
+      {
         id: 'library',
         label: 'Library',
         icon: BookOpen,
@@ -87,12 +106,65 @@ const navByRole = {
         ],
       },
       {
+        id: 'faculty',
+        label: 'Faculty',
+        icon: UserRoundCog,
+        children: [
+          { label: 'Create Faculty', to: '/admin/faculty/create', icon: UserPlus, permission: 'faculty.create' },
+          { label: 'View Faculty', to: '/admin/faculty/view', icon: ListChecks, permission: 'faculty.view' },
+        ],
+      },
+      {
+        id: 'moderators',
+        label: 'Moderators',
+        icon: Shield,
+        children: [
+          { label: 'Create Moderator', to: '/admin/moderators/create', icon: UserPlus, permission: 'moderator.create' },
+          { label: 'View Moderators', to: '/admin/moderators/view', icon: ListChecks, permission: 'moderator.view' },
+        ],
+      },
+      {
         id: 'library',
         label: 'Library',
         icon: BookOpen,
         children: [
           { label: 'Add Questions', to: '/admin/library/add', icon: Plus, permission: 'library.create' },
           { label: 'View Library', to: '/admin/library/view', icon: BookOpen, permission: 'library.view' },
+        ],
+      },
+    ],
+  },
+  faculty: {
+    dashboard: '/faculty',
+    sections: [
+      {
+        id: 'faculty-work',
+        label: 'Assessments',
+        icon: ClipboardList,
+        children: [
+          { label: 'Assigned Work', to: '/faculty', icon: NotebookTabs },
+        ],
+      },
+      {
+        id: 'faculty-library',
+        label: 'My Library',
+        icon: BookOpen,
+        children: [
+          { label: 'Add Questions', to: '/faculty/library/add', icon: Plus, permission: 'library.create' },
+          { label: 'View Library', to: '/faculty/library/view', icon: BookOpen, permission: 'library.view' },
+        ],
+      },
+    ],
+  },
+  moderator: {
+    dashboard: '/moderator',
+    sections: [
+      {
+        id: 'moderation-work',
+        label: 'Reviews',
+        icon: Shield,
+        children: [
+          { label: 'Review Queue', to: '/moderator', icon: NotebookTabs },
         ],
       },
     ],
@@ -146,6 +218,8 @@ function filterNavConfig(navConfig, role, user) {
 const roleTitles = {
   super_admin: 'Super Admin',
   admin: 'Admin',
+  faculty: 'Faculty',
+  moderator: 'Moderator',
   student: 'Student',
   proctor: 'Proctor',
 };
@@ -156,51 +230,51 @@ function SidebarSection({ section, isOpen, onToggle, sidebarOpen }) {
   const expanded = sidebarOpen && (isOpen || isSectionActive);
 
   return (
-    <div className="group/sidebar-section space-y-1">
+    <div className="group/sidebar-section space-y-0.5">
       <button
-        className={`flex h-11 w-full translate-x-0 items-center rounded-md border text-sm font-semibold transition duration-300 ease-out hover:translate-x-1 ${
-          sidebarOpen ? 'justify-between px-3' : 'justify-center px-0'
+        className={`flex h-9 w-full items-center rounded-md border text-[13px] font-semibold transition duration-200 ease-out ${
+          sidebarOpen ? 'justify-between px-2.5' : 'justify-center px-0'
         } ${
           expanded
-            ? 'border-brand-200 bg-brand-50 text-brand-700 shadow-sm'
-            : 'border-transparent text-slate-700 hover:border-slate-200 hover:bg-slate-50'
+            ? 'border-brand-100 bg-brand-50 text-brand-700'
+            : 'border-transparent text-slate-600 hover:border-slate-200 hover:bg-slate-50 hover:text-slate-950'
         }`}
         type="button"
         onClick={onToggle}
         title={section.label}
       >
-        <span className={`flex items-center ${sidebarOpen ? 'gap-3' : 'justify-center'}`}>
-          <section.icon size={18} className="text-brand-500" />
-          <span className={`overflow-hidden whitespace-nowrap transition-all duration-300 ${sidebarOpen ? 'max-w-[180px] opacity-100' : 'max-w-0 opacity-0'}`}>
+        <span className={`flex min-w-0 items-center ${sidebarOpen ? 'gap-2.5' : 'justify-center'}`}>
+          <section.icon size={16} className="shrink-0 text-brand-500" />
+          <span className={`overflow-hidden truncate whitespace-nowrap transition-all duration-200 ${sidebarOpen ? 'max-w-[145px] opacity-100' : 'max-w-0 opacity-0'}`}>
             {section.label}
           </span>
         </span>
-        {sidebarOpen ? <ChevronDown size={16} className={`text-slate-400 transition-transform duration-300 ${expanded ? 'rotate-180' : ''}`} /> : null}
+        {sidebarOpen ? <ChevronDown size={14} className={`shrink-0 text-slate-400 transition-transform duration-200 ${expanded ? 'rotate-180' : ''}`} /> : null}
       </button>
 
       <div
-        className={`ml-4 overflow-hidden border-l border-slate-200 pl-3 transition-all duration-300 ease-out ${
+        className={`ml-3 overflow-hidden border-l border-slate-200 pl-2.5 transition-all duration-200 ease-out ${
           sidebarOpen ? 'group-hover/sidebar-section:max-h-64 group-hover/sidebar-section:translate-x-0 group-hover/sidebar-section:opacity-100' : ''
         } ${
-          expanded ? 'max-h-64 translate-x-0 opacity-100' : 'max-h-0 -translate-x-2 opacity-0'
+          expanded ? 'max-h-64 translate-x-0 opacity-100' : 'max-h-0 -translate-x-1 opacity-0'
         }`}
       >
-        <div className="space-y-1 py-1">
+        <div className="space-y-0.5 py-1">
           {section.children.map((item) => (
             <NavLink
               key={`${section.id}-${item.label}`}
               to={item.to}
               end
               className={({ isActive }) =>
-                `flex h-9 translate-x-0 items-center gap-2 rounded-md px-3 text-sm font-medium transition duration-300 ease-out hover:translate-x-1 ${
+                `flex h-8 items-center gap-2 rounded-md px-2.5 text-[13px] font-medium transition duration-200 ease-out ${
                   isActive
-                    ? 'bg-white text-brand-700 shadow-sm ring-1 ring-brand-100'
-                    : 'text-slate-600 hover:bg-white hover:text-slate-950'
+                    ? 'border border-brand-100 bg-white text-brand-700'
+                    : 'border border-transparent text-slate-500 hover:bg-white hover:text-slate-900'
                 }`
               }
             >
-              <item.icon size={15} className="text-brand-500" />
-              {item.label}
+              <item.icon size={14} className="shrink-0 text-brand-500" />
+              <span className="truncate">{item.label}</span>
             </NavLink>
           ))}
         </div>
@@ -270,40 +344,40 @@ export function AppShell({ role }) {
     <div className="min-h-screen bg-[#f6f7f9]">
       <aside
         className={`fixed inset-y-0 left-0 z-30 hidden overflow-hidden border-r border-slate-200 bg-white shadow-[8px_0_30px_rgba(15,23,42,0.08)] transition-all duration-300 ease-out lg:block ${
-          isSidebarHovered ? 'w-[292px]' : 'w-[84px]'
+          isSidebarHovered ? 'w-[238px]' : 'w-[68px]'
         }`}
         onMouseEnter={() => setIsSidebarHovered(true)}
         onMouseLeave={() => setIsSidebarHovered(false)}
       >
-        <div className={`flex items-center border-b border-slate-200 transition-all duration-300 ${isSidebarHovered ? 'h-24 justify-start px-4' : 'h-20 justify-center px-2'}`}>
+        <div className={`flex items-center border-b border-slate-200 transition-all duration-300 ${isSidebarHovered ? 'h-16 justify-start px-4' : 'h-16 justify-center px-2'}`}>
           <img
             src="/logo.webp"
             alt="Evalora"
-            className={`object-contain transition-all duration-300 ${isSidebarHovered ? 'h-20 w-60 object-left' : 'h-12 w-14 object-center'}`}
+            className={`object-contain transition-all duration-300 ${isSidebarHovered ? 'h-11 w-36 object-left' : 'h-9 w-10 object-center'}`}
           />
         </div>
 
-        <div className={`overflow-hidden border-b border-slate-100 transition-all duration-300 ${isSidebarHovered ? 'max-h-24 px-5 py-4 opacity-100' : 'max-h-0 px-5 py-0 opacity-0'}`}>
-          <p className="field-label text-slate-400">Workspace</p>
-          <p className="mt-1 truncate text-sm font-semibold text-slate-900">{roleTitles[role]}</p>
+        <div className={`overflow-hidden border-b border-slate-100 transition-all duration-300 ${isSidebarHovered ? 'max-h-14 px-4 py-2.5 opacity-100' : 'max-h-0 px-4 py-0 opacity-0'}`}>
+          <p className="text-[10px] font-semibold uppercase text-slate-400">Workspace</p>
+          <p className="mt-0.5 truncate text-xs font-semibold text-slate-800">{roleTitles[role]}</p>
         </div>
 
-        <nav className={`max-h-[calc(100vh-96px)] space-y-2 overflow-y-auto py-5 transition-all duration-300 ${isSidebarHovered ? 'px-4' : 'px-3'}`}>
+        <nav className={`max-h-[calc(100vh-72px)] space-y-1 overflow-y-auto py-3 transition-all duration-300 ${isSidebarHovered ? 'px-3' : 'px-2'}`}>
           <NavLink
             to={navConfig.dashboard}
             end
             className={({ isActive }) =>
-              `flex h-11 translate-x-0 items-center rounded-md border text-sm font-semibold transition duration-300 ease-out hover:translate-x-1 ${
-                isSidebarHovered ? 'justify-start gap-3 px-3' : 'justify-center px-0'
+              `flex h-9 items-center rounded-md border text-[13px] font-semibold transition duration-200 ease-out ${
+                isSidebarHovered ? 'justify-start gap-2.5 px-2.5' : 'justify-center px-0'
               } ${
                 isActive
-                  ? 'border-brand-300 bg-brand-50 text-brand-700'
-                  : 'border-transparent text-slate-700 hover:border-slate-200 hover:bg-slate-50'
+                  ? 'border-brand-100 bg-brand-50 text-brand-700'
+                  : 'border-transparent text-slate-600 hover:border-slate-200 hover:bg-slate-50 hover:text-slate-950'
               }`
             }
           >
-            <LayoutDashboard size={18} className="text-brand-500" />
-            <span className={`overflow-hidden whitespace-nowrap transition-all duration-300 ${isSidebarHovered ? 'max-w-[180px] opacity-100' : 'max-w-0 opacity-0'}`}>
+            <LayoutDashboard size={16} className="shrink-0 text-brand-500" />
+            <span className={`overflow-hidden truncate whitespace-nowrap transition-all duration-200 ${isSidebarHovered ? 'max-w-[145px] opacity-100' : 'max-w-0 opacity-0'}`}>
               Dashboard
             </span>
           </NavLink>
@@ -320,7 +394,7 @@ export function AppShell({ role }) {
         </nav>
       </aside>
 
-      <div className="transition-[padding] duration-300 lg:pl-[84px]">
+      <div className="transition-[padding] duration-300 lg:pl-[68px]">
         <header className="sticky top-0 z-10 flex h-16 items-center justify-between border-b border-slate-200 bg-white/95 px-6 backdrop-blur">
           <div>
             <p className="field-label text-brand-600">Evalora</p>

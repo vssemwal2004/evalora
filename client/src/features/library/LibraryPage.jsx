@@ -36,6 +36,7 @@ const defaultQuestion = {
 };
 
 function getRoleBase(pathname) {
+  if (pathname.startsWith('/faculty')) return '/faculty';
   return pathname.startsWith('/super-admin') ? '/super-admin' : '/admin';
 }
 
@@ -111,6 +112,7 @@ export function AddLibraryQuestionsPage() {
   const location = useLocation();
   const [searchParams] = useSearchParams();
   const assessmentId = searchParams.get('assessmentId') || '';
+  const workId = searchParams.get('workId') || '';
   const roleBase = getRoleBase(location.pathname);
   const [paperHeading, setPaperHeading] = useState('');
   const [mode, setMode] = useState('single');
@@ -261,7 +263,12 @@ export function AddLibraryQuestionsPage() {
         title="Add Questions"
         description="Create a paper heading first, then add MCQ or one-word questions manually or from Excel."
         actions={
-          assessmentId ? (
+          workId ? (
+            <button className="secondary-button" type="button" onClick={() => navigate(`/faculty/work/${workId}`)}>
+              <CheckCircle2 size={16} className="text-brand-500" />
+              Back to Assessment
+            </button>
+          ) : assessmentId ? (
             <button className="secondary-button" type="button" onClick={continueToAssessmentMapping} disabled={!canContinueToAssessment}>
               <CheckCircle2 size={16} className="text-brand-500" />
               Continue to Course Mapping
@@ -419,6 +426,10 @@ export function AddLibraryQuestionsPage() {
           {assessmentId ? (
             <button className="primary-button h-9 px-3 text-xs" type="button" onClick={continueToAssessmentMapping}>
               Continue to Course Mapping
+            </button>
+          ) : workId ? (
+            <button className="primary-button h-9 px-3 text-xs" type="button" onClick={() => navigate(`/faculty/work/${workId}`)}>
+              Return to Assessment & Import
             </button>
           ) : null}
         </div>

@@ -17,7 +17,19 @@ function verifyAuthToken(token) {
   return jwt.verify(token, env.jwtSecret);
 }
 
+function signAssignmentToken({ assignmentId, userId, role }) {
+  return jwt.sign({ assignmentId: String(assignmentId), sub: String(userId), role, purpose: 'assignment' }, env.jwtSecret, { expiresIn: '2h' });
+}
+
+function verifyAssignmentToken(token) {
+  const payload = jwt.verify(token, env.jwtSecret);
+  if (payload.purpose !== 'assignment') throw new Error('Invalid assignment access token.');
+  return payload;
+}
+
 module.exports = {
   signAuthToken,
   verifyAuthToken,
+  signAssignmentToken,
+  verifyAssignmentToken,
 };

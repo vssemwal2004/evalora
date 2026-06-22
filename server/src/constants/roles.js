@@ -1,6 +1,8 @@
 const ROLES = Object.freeze({
   SUPER_ADMIN: 'super_admin',
   ADMIN: 'admin',
+  FACULTY: 'faculty',
+  MODERATOR: 'moderator',
   STUDENT: 'student',
   PROCTOR: 'proctor',
 });
@@ -19,6 +21,14 @@ const ADMIN_PERMISSIONS = Object.freeze([
   'course.create',
   'course.edit',
   'course.archive',
+  'faculty.view',
+  'faculty.create',
+  'faculty.edit',
+  'faculty.remove',
+  'moderator.view',
+  'moderator.create',
+  'moderator.edit',
+  'moderator.remove',
   'student.add',
   'student.edit',
   'student.remove',
@@ -40,7 +50,20 @@ const ADMIN_PERMISSIONS = Object.freeze([
   'audit.view',
 ]);
 
+const STAFF_PERMISSIONS = Object.freeze([
+  'work.view',
+  'assessment.questions.add',
+  'assessment.questions.edit',
+  'assessment.submit',
+  'assessment.review',
+  'library.view',
+  'library.create',
+  'library.edit',
+  'library.archive',
+]);
+
 module.exports = {
   ROLES,
   ADMIN_PERMISSIONS,
+  STAFF_PERMISSIONS,
 };

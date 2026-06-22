@@ -13,6 +13,7 @@ const defaultPermissions = [
   'library.view',
   'mail.send',
   'reports.view',
+  'reports.export',
 ];
 
 function statusClass(status) {

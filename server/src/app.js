@@ -12,6 +12,16 @@ const app = express();
 
 app.set('trust proxy', 1);
 
+app.get('/', (_req, res) => {
+  res.json({
+    status: 'ok',
+    service: 'evalora-api',
+    message: 'Backend is running. Open the frontend at the configured client URL.',
+    frontendUrl: env.frontendUrl,
+    healthUrl: '/api/health',
+  });
+});
+
 app.use(helmet());
 app.use(
   cors({

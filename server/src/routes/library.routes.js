@@ -7,14 +7,19 @@ const { normalizeQuestionPayload, validateQuestionPayload } = require('../utils/
 
 const router = express.Router();
 
-router.use(authenticate, requireRole(ROLES.SUPER_ADMIN, ROLES.ADMIN));
+router.use(authenticate, requireRole(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.FACULTY));
 
 function getScopedQuery(req) {
   if (req.user.role === ROLES.SUPER_ADMIN) {
     return {};
   }
 
+  if (req.user.role === ROLES.FACULTY) return { createdBy: req.user._id };
   return { ownerAdminId: req.user._id };
+}
+
+function getLibraryOwner(req) {
+  return req.user.role === ROLES.FACULTY ? req.user.ownerAdminId : req.user._id;
 }
 
 function normalizeHeading(value) {
@@ -439,7 +444,7 @@ router.post('/questions/bulk', requirePermission('library.create'), async (req, 
       });
       const question = await Question.create({
         ...payload,
-        ownerAdminId: req.user._id,
+        ownerAdminId: getLibraryOwner(req),
         createdBy: req.user._id,
       });
       created.push(question);
@@ -492,7 +497,7 @@ router.post('/questions', requirePermission('library.create'), async (req, res, 
     });
     const question = await Question.create({
       ...payload,
-      ownerAdminId: req.user._id,
+      ownerAdminId: getLibraryOwner(req),
       createdBy: req.user._id,
     });
 

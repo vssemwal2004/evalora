@@ -27,6 +27,32 @@ const courseSchema = new mongoose.Schema(
       default: 0,
       min: 0,
     },
+    facultyId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+    },
+    facultyName: {
+      type: String,
+      trim: true,
+    },
+    facultyEmail: {
+      type: String,
+      trim: true,
+      lowercase: true,
+    },
+    moderatorId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+    },
+    moderatorName: {
+      type: String,
+      trim: true,
+    },
+    moderatorEmail: {
+      type: String,
+      trim: true,
+      lowercase: true,
+    },
   },
   { _id: true }
 );

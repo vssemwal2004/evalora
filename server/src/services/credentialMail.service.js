@@ -95,8 +95,63 @@ async function sendProctorCredentialMail({ assessment, proctor }) {
   });
 }
 
+async function sendStaffCredentialMail({ person, label }) {
+  const transport = getTransporter();
+  const courses = (person.assignedCourses || [])
+    .map((course) => `${course.courseName} (${course.courseCode})`)
+    .join(', ');
+  const subject = `Evalora ${label} Access`;
+  const text = [
+    `Hello ${person.name},`,
+    '',
+    `Your ${label.toLowerCase()} access has been created on Evalora.`,
+    `Login Email: ${person.email}`,
+    `Password: ${person.passwordPreview || 'Use the password shared by your admin.'}`,
+    `Assigned Courses: ${courses || 'Not assigned'}`,
+    '',
+    'Use these credentials on the Evalora login page.',
+    '',
+    'Regards,',
+    'Evalora Team',
+  ].join('\n');
+
+  await transport.sendMail({
+    from: env.smtp.from,
+    to: person.email,
+    subject,
+    text,
+  });
+}
+
+async function sendAssignmentMail({ assignment, assessment, recipient, assignedBy, kind, reason }) {
+  const transport = getTransporter();
+  const isRejection = kind === 'rejected';
+  const subject = isRejection
+    ? `Evalora review required - ${assessment.title}`
+    : `Evalora assessment assigned - ${assessment.title}`;
+  const text = [
+    `Hello ${recipient.name},`,
+    '',
+    isRejection
+      ? `The question set for ${assignment.courseName} needs correction.`
+      : `${assessment.title} has been assigned to you by ${assignedBy?.name || 'an administrator'}.`,
+    `Assessment Code: ${assessment.assessmentCode}`,
+    `Course: ${assignment.courseName}${assignment.courseId ? ` (${assignment.courseId})` : ''}`,
+    reason ? `Review reason: ${reason}` : '',
+    !isRejection ? `Assignment Password: ${assignment.passwordPreview}` : '',
+    '',
+    'Sign in to Evalora and open Assigned Work to continue.',
+    '',
+    'Regards,',
+    'Evalora Team',
+  ].filter((line) => line !== '').join('\n');
+  await transport.sendMail({ from: env.smtp.from, to: recipient.email, subject, text });
+}
+
 module.exports = {
   hasSmtpConfig,
   sendStudentCredentialMail,
   sendProctorCredentialMail,
+  sendStaffCredentialMail,
+  sendAssignmentMail,
 };

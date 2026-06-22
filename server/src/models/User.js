@@ -1,6 +1,23 @@
 const bcrypt = require('bcryptjs');
 const mongoose = require('mongoose');
-const { ROLES, ADMIN_PERMISSIONS } = require('../constants/roles');
+const { ROLES, ADMIN_PERMISSIONS, STAFF_PERMISSIONS } = require('../constants/roles');
+
+const assignedCourseSchema = new mongoose.Schema(
+  {
+    courseName: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+    courseCode: {
+      type: String,
+      required: true,
+      trim: true,
+      uppercase: true,
+    },
+  },
+  { _id: false }
+);
 
 const userSchema = new mongoose.Schema(
   {
@@ -30,6 +47,10 @@ const userSchema = new mongoose.Schema(
       required: true,
       select: false,
     },
+    passwordPreview: {
+      type: String,
+      select: false,
+    },
     role: {
       type: String,
       enum: Object.values(ROLES),
@@ -47,10 +68,19 @@ const userSchema = new mongoose.Schema(
       default: [],
       validate: {
         validator(value) {
-          return value.every((permission) => ADMIN_PERMISSIONS.includes(permission));
+          return value.every((permission) => [...ADMIN_PERMISSIONS, ...STAFF_PERMISSIONS].includes(permission));
         },
         message: 'Invalid admin permission found.',
       },
+    },
+    assignedCourses: {
+      type: [assignedCourseSchema],
+      default: [],
+    },
+    ownerAdminId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      index: true,
     },
     lastLoginAt: Date,
     activeSessionId: {
@@ -63,6 +93,7 @@ const userSchema = new mongoose.Schema(
 
 userSchema.index({ email: 1, role: 1 });
 userSchema.index({ loginId: 1, role: 1 });
+userSchema.index({ ownerAdminId: 1, role: 1 });
 
 userSchema.methods.comparePassword = function comparePassword(password) {
   return bcrypt.compare(password, this.passwordHash);

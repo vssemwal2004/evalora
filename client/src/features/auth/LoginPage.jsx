@@ -6,6 +6,8 @@ import { useAuth } from './AuthContext.jsx';
 const roleRoutes = {
   super_admin: '/super-admin',
   admin: '/admin',
+  faculty: '/faculty',
+  moderator: '/moderator',
   student: '/student',
   proctor: '/proctor',
 };

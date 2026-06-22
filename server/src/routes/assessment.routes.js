@@ -9,6 +9,7 @@ const AssessmentSecurityEvent = require('../models/AssessmentSecurityEvent');
 const { ROLES } = require('../constants/roles');
 const { authenticate, requirePermission, requireRole } = require('../middleware/auth');
 const { writeAuditLog } = require('../services/audit.service');
+const { syncAssessmentAssignments } = require('../services/assignment.service');
 
 const router = express.Router();
 
@@ -75,6 +76,12 @@ function normalizeCourses(courses) {
       questionCount: Number(course.questionCount || 0),
       studentCount: Number(course.studentCount || 0),
       eligibleStudentCount: Number(course.eligibleStudentCount || 0),
+      facultyId: course.facultyId || undefined,
+      facultyName: String(course.facultyName || '').trim(),
+      facultyEmail: String(course.facultyEmail || '').trim().toLowerCase(),
+      moderatorId: course.moderatorId || undefined,
+      moderatorName: String(course.moderatorName || '').trim(),
+      moderatorEmail: String(course.moderatorEmail || '').trim().toLowerCase(),
     }));
 }
 
@@ -316,6 +323,10 @@ router.patch('/:id', requirePermission('assessment.edit'), async (req, res, next
     assessment.updatedBy = req.user._id;
     await assessment.save();
 
+    if (assessment.status === 'pending' && assessment.visibility === 'visible') {
+      await syncAssessmentAssignments(assessment, req.user);
+    }
+
     await writeAuditLog(req, {
       action: 'assessment.update',
       targetType: 'Assessment',
@@ -472,6 +483,12 @@ router.post('/:id/duplicate', requirePermission('assessment.duplicate'), async (
       courses: (source.courses || []).map((course) => ({
         courseName: course.courseName,
         courseId: course.courseId,
+        facultyId: course.facultyId,
+        facultyName: course.facultyName,
+        facultyEmail: course.facultyEmail,
+        moderatorId: course.moderatorId,
+        moderatorName: course.moderatorName,
+        moderatorEmail: course.moderatorEmail,
       })),
       settings: source.settings,
     });

@@ -3,8 +3,8 @@ export function PageHeader({ eyebrow, title, description, actions }) {
     <div className="page-header">
       <div className="min-w-0">
         {eyebrow ? <p className="field-label text-brand-600">{eyebrow}</p> : null}
-        <h2 className="mt-1 text-[22px] font-semibold leading-tight text-slate-950">{title}</h2>
-        {description ? <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500">{description}</p> : null}
+        <h2 className="mt-1 text-lg font-semibold leading-tight text-slate-950">{title}</h2>
+        {description ? <p className="mt-1 max-w-3xl text-sm leading-5 text-slate-500">{description}</p> : null}
       </div>
       {actions ? <div className="flex flex-wrap items-center gap-2">{actions}</div> : null}
     </div>

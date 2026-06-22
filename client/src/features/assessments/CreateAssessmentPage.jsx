@@ -17,6 +17,7 @@ import {
   Settings,
   ShieldCheck,
   UserRoundCheck,
+  UserRoundCog,
   Users,
   Video,
 } from 'lucide-react';
@@ -24,8 +25,8 @@ import { api } from '../../lib/api';
 import { AssessmentProctorsPage } from '../proctors/AssessmentProctorsPage.jsx';
 import { AssessmentStudentsPage } from '../students/AssessmentStudentsPage.jsx';
 
-const steps = ['Basic', 'Add Questions', 'Students', 'Proctors', 'Schedule', 'Settings', 'Review'];
-const stepIcons = [ClipboardList, BookOpen, Users, UserRoundCheck, CalendarClock, Settings, Check];
+const steps = ['Basic', 'Add Questions', 'Faculty', 'Moderator', 'Students', 'Proctors', 'Schedule', 'Settings', 'Review'];
+const stepIcons = [ClipboardList, BookOpen, UserRoundCog, ShieldCheck, Users, UserRoundCheck, CalendarClock, Settings, Check];
 
 const defaultSettings = {
   passwordRequired: true,
@@ -247,11 +248,13 @@ function getStepIndex(value) {
   const stepMap = {
     basic: 0,
     questions: 1,
-    students: 2,
-    proctors: 3,
-    schedule: 4,
-    settings: 5,
-    review: 6,
+    faculty: 2,
+    moderator: 3,
+    students: 4,
+    proctors: 5,
+    schedule: 6,
+    settings: 7,
+    review: 8,
   };
 
   return stepMap[value] ?? 0;
@@ -398,6 +401,94 @@ function SettingsPanel({ settings, onChange }) {
   );
 }
 
+function staffCanHandleCourse(person, course) {
+  return (person.assignedCourses || []).some((assignedCourse) => {
+    const codeMatches = assignedCourse.courseCode && course.courseId && assignedCourse.courseCode === course.courseId;
+    const nameMatches = assignedCourse.courseName?.toLowerCase() === course.courseName?.toLowerCase();
+    return codeMatches || nameMatches;
+  });
+}
+
+function StaffAssignmentPanel({ label, icon: Icon, courses, people, roleKey, onAssign }) {
+  const idKey = `${roleKey}Id`;
+  const assignedCount = courses.filter((course) => course[idKey]).length;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
+        <div className="flex items-center gap-3">
+          <span className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-brand-100 bg-brand-50 text-brand-600">
+            <Icon size={18} />
+          </span>
+          <div>
+            <p className="field-label text-brand-600">Choose {label}</p>
+            <p className="mt-1 text-sm font-semibold text-slate-950">
+              {assignedCount} of {courses.length} course(s) assigned
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+        <div className="overflow-x-auto">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Course</th>
+                <th>{label}</th>
+                <th>Allowed People</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-200">
+              {courses.length === 0 ? (
+                <tr>
+                  <td colSpan={3} className="text-center text-slate-500">
+                    Map question folders to courses before assigning {label.toLowerCase()}.
+                  </td>
+                </tr>
+              ) : (
+                courses.map((course) => {
+                  const eligiblePeople = people.filter((person) => staffCanHandleCourse(person, course));
+                  const currentId = course[idKey] || '';
+
+                  return (
+                    <tr key={`${roleKey}-${course.courseName}-${course.courseId}`}>
+                      <td>
+                        <p className="font-semibold text-slate-950">{course.courseName}</p>
+                        <p className="text-xs text-slate-500">{course.courseId || '-'}</p>
+                      </td>
+                      <td>
+                        <select
+                          className="field-input min-w-[260px]"
+                          value={currentId}
+                          onChange={(event) => {
+                            const person = eligiblePeople.find((item) => item._id === event.target.value);
+                            onAssign(course, person || null);
+                          }}
+                        >
+                          <option value="">Select {label.toLowerCase()}</option>
+                          {eligiblePeople.map((person) => (
+                            <option key={person._id} value={person._id}>
+                              {person.name} - {person.email}
+                            </option>
+                          ))}
+                        </select>
+                      </td>
+                      <td className="text-xs leading-5 text-slate-500">
+                        {eligiblePeople.length > 0 ? `${eligiblePeople.length} available` : `No active ${label.toLowerCase()} assigned to this course`}
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function CreateAssessmentPage() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -413,6 +504,8 @@ export function CreateAssessmentPage() {
   const [isLoadingDraft, setIsLoadingDraft] = useState(Boolean(draftId));
   const [isSaving, setIsSaving] = useState(false);
   const [masterCourses, setMasterCourses] = useState([]);
+  const [faculty, setFaculty] = useState([]);
+  const [moderators, setModerators] = useState([]);
   const [questions, setQuestions] = useState([]);
   const [selectedFolderDetails, setSelectedFolderDetails] = useState([]);
   const [expandedFolder, setExpandedFolder] = useState('');
@@ -493,18 +586,29 @@ export function CreateAssessmentPage() {
 
   const hasSavedAssessmentPassword = Boolean(draftAssessment?.hasCommonAssessmentPassword);
 
+  const isDraftSaved = Boolean(draftAssessment?._id);
+  const isEditingDraft = Boolean(draftId || draftAssessment?._id);
+  const courseOptions = useMemo(() => toCourseOptions(masterCourses), [masterCourses]);
+  const assessmentCourses = useMemo(
+    () => (draftAssessment?.courses?.length ? draftAssessment.courses : form.courses || []),
+    [draftAssessment?.courses, form.courses]
+  );
+
   const validation = useMemo(() => {
     const issues = [...basicValidation];
+    if (assessmentCourses.length > 0 && assessmentCourses.some((course) => !course.facultyId)) {
+      issues.push('Assign faculty for every mapped course.');
+    }
+    if (assessmentCourses.length > 0 && assessmentCourses.some((course) => !course.moderatorId)) {
+      issues.push('Assign moderator for every mapped course.');
+    }
     if (!form.globalDurationMinutes || Number(form.globalDurationMinutes) < 1) issues.push('Duration must be at least 1 minute.');
     if (form.settings.passwordRequired && !form.commonAssessmentPassword.trim() && !hasSavedAssessmentPassword) {
       issues.push('Common assessment password is required when password protection is enabled.');
     }
     return issues;
-  }, [basicValidation, form.commonAssessmentPassword, form.globalDurationMinutes, form.settings.passwordRequired, hasSavedAssessmentPassword]);
+  }, [assessmentCourses, basicValidation, form.commonAssessmentPassword, form.globalDurationMinutes, form.settings.passwordRequired, hasSavedAssessmentPassword]);
 
-  const isDraftSaved = Boolean(draftAssessment?._id);
-  const isEditingDraft = Boolean(draftId || draftAssessment?._id);
-  const courseOptions = useMemo(() => toCourseOptions(masterCourses), [masterCourses]);
   const mappedFolders = useMemo(() => {
     const map = new Map();
 
@@ -624,6 +728,34 @@ export function CreateAssessmentPage() {
   useEffect(() => {
     let ignore = false;
 
+    async function loadPeople() {
+      try {
+        const [facultyResponse, moderatorResponse] = await Promise.all([
+          api.get('/people/faculty', { params: { status: 'active', limit: 1000 } }),
+          api.get('/people/moderators', { params: { status: 'active', limit: 1000 } }),
+        ]);
+
+        if (!ignore) {
+          setFaculty(facultyResponse.data.items || []);
+          setModerators(moderatorResponse.data.items || []);
+        }
+      } catch (requestError) {
+        if (!ignore && requestError.response?.status !== 403) {
+          setError(requestError.response?.data?.message || 'Unable to load faculty and moderators.');
+        }
+      }
+    }
+
+    loadPeople();
+
+    return () => {
+      ignore = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let ignore = false;
+
     async function loadSelectedFolders() {
       if (selectedFolderNames.length === 0) {
         setSelectedFolderDetails([]);
@@ -722,12 +854,34 @@ export function CreateAssessmentPage() {
     }));
   }
 
+  function assignCoursePerson(course, person, roleKey) {
+    const idKey = `${roleKey}Id`;
+    const nameKey = `${roleKey}Name`;
+    const emailKey = `${roleKey}Email`;
+
+    const nextCourses = assessmentCourses.map((item) => {
+      if (courseKey(item) !== courseKey(course)) {
+        return item;
+      }
+
+      return {
+        ...item,
+        [idKey]: person?._id || '',
+        [nameKey]: person?.name || '',
+        [emailKey]: person?.email || '',
+      };
+    });
+
+    setForm((current) => ({ ...current, courses: nextCourses }));
+    setDraftAssessment((current) => (current ? { ...current, courses: nextCourses } : current));
+  }
+
   function buildAssessmentPayload() {
     const payload = {
       ...form,
       globalDurationMinutes: Number(form.globalDurationMinutes),
+      courses: assessmentCourses,
     };
-    delete payload.courses;
     return payload;
   }
 
@@ -736,7 +890,15 @@ export function CreateAssessmentPage() {
       return basicValidation;
     }
 
-    if (step === 2 && (!form.globalDurationMinutes || Number(form.globalDurationMinutes) < 1)) {
+    if (step === 2 && assessmentCourses.length > 0 && assessmentCourses.some((course) => !course.facultyId)) {
+      return ['Assign faculty for every mapped course.'];
+    }
+
+    if (step === 3 && assessmentCourses.length > 0 && assessmentCourses.some((course) => !course.moderatorId)) {
+      return ['Assign moderator for every mapped course.'];
+    }
+
+    if (step === 6 && (!form.globalDurationMinutes || Number(form.globalDurationMinutes) < 1)) {
       return ['Duration must be at least 1 minute.'];
     }
 
@@ -749,7 +911,15 @@ export function CreateAssessmentPage() {
     }
 
     if (issues.some((issue) => issue.includes('Duration') || issue.includes('password'))) {
-      return 4;
+      return 6;
+    }
+
+    if (issues.some((issue) => issue.includes('faculty'))) {
+      return 2;
+    }
+
+    if (issues.some((issue) => issue.includes('moderator'))) {
+      return 3;
     }
 
     return steps.length - 1;
@@ -801,6 +971,7 @@ export function CreateAssessmentPage() {
     const response = await api.get(`/assessments/${assessmentId}`);
     const assessment = response.data.assessment;
     setDraftAssessment(assessment);
+    setForm(assessmentToForm(assessment));
     return assessment;
   }
 
@@ -822,7 +993,7 @@ export function CreateAssessmentPage() {
       return;
     }
 
-    if (activeStep === 0 || activeStep >= 4) {
+    if (activeStep === 0 || activeStep >= 2) {
       const assessment = await saveAssessmentDraft({ requireFullValidation: false });
 
       if (!assessment) {
@@ -1296,6 +1467,28 @@ export function CreateAssessmentPage() {
           ) : null}
 
           {activeStep === 2 ? (
+            <StaffAssignmentPanel
+              label="Faculty"
+              icon={UserRoundCog}
+              courses={assessmentCourses}
+              people={faculty}
+              roleKey="faculty"
+              onAssign={(course, person) => assignCoursePerson(course, person, 'faculty')}
+            />
+          ) : null}
+
+          {activeStep === 3 ? (
+            <StaffAssignmentPanel
+              label="Moderator"
+              icon={ShieldCheck}
+              courses={assessmentCourses}
+              people={moderators}
+              roleKey="moderator"
+              onAssign={(course, person) => assignCoursePerson(course, person, 'moderator')}
+            />
+          ) : null}
+
+          {activeStep === 4 ? (
             draftAssessment?._id ? (
               <AssessmentStudentsPage assessmentId={draftAssessment._id} embedded />
             ) : (
@@ -1305,7 +1498,7 @@ export function CreateAssessmentPage() {
             )
           ) : null}
 
-          {activeStep === 3 ? (
+          {activeStep === 5 ? (
             draftAssessment?._id ? (
               <AssessmentProctorsPage assessmentId={draftAssessment._id} embedded />
             ) : (
@@ -1315,7 +1508,7 @@ export function CreateAssessmentPage() {
             )
           ) : null}
 
-          {activeStep === 4 ? (
+          {activeStep === 6 ? (
             <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
               <div className="grid gap-4 md:grid-cols-2">
                 <div>
@@ -1341,9 +1534,9 @@ export function CreateAssessmentPage() {
             </div>
           ) : null}
 
-          {activeStep === 5 ? <SettingsPanel settings={form.settings} onChange={updateSetting} /> : null}
+          {activeStep === 7 ? <SettingsPanel settings={form.settings} onChange={updateSetting} /> : null}
 
-          {activeStep === 6 ? (
+          {activeStep === 8 ? (
             <div className="space-y-4">
               <div className="grid gap-3 md:grid-cols-4">
                 <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
