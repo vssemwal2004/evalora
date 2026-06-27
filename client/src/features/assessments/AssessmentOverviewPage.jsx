@@ -35,7 +35,7 @@ const statusTabs = [
 
 const actionMenuSize = {
   width: 240,
-  height: 390,
+  height: 470,
   gap: 8,
 };
 
@@ -61,6 +61,21 @@ function mailSummaryTone(summary) {
   const total = Number(summary?.total || 0);
   if (total === 0) return 'text-slate-400';
   return Number(summary?.sent || 0) >= total ? 'text-green-700' : 'text-amber-700';
+}
+
+function mailPendingCount(summary) {
+  const total = Number(summary?.total || 0);
+  const sent = Number(summary?.sent || 0);
+  return Math.max(total - sent, 0);
+}
+
+function isPublishedForMail(assessment) {
+  return !['draft', 'review'].includes(assessment?.status);
+}
+
+function canSendAssessmentMail(assessment, kind) {
+  const summary = assessment?.mailSummary?.[kind];
+  return isPublishedForMail(assessment) && Number(summary?.total || 0) > 0 && mailPendingCount(summary) > 0;
 }
 
 function getCreatePath(pathname) {
@@ -101,6 +116,8 @@ function getActionLabel(action, assessment) {
     draft: 'Move to draft',
     delete: 'Delete assessment',
     reset: 'Reset all exam attempts',
+    send_students: 'Send mail to students',
+    send_proctors: 'Send mail to proctors',
   };
 
   return labels[action] || 'Confirm action';
@@ -131,6 +148,14 @@ function getActionDescription(action, assessment) {
 
   if (action === 'reset') {
     return 'This permanently removes all submitted and in-progress attempts, saved answers, and security events. Every assigned student will be able to start the exam again.';
+  }
+
+  if (action === 'send_students') {
+    return 'Credential mail will be sent only to students who have not already received it. Already-sent records are skipped.';
+  }
+
+  if (action === 'send_proctors') {
+    return 'Credential mail will be sent only to proctors who have not already received it. Already-sent records are skipped.';
   }
 
   return 'Please confirm before continuing.';
@@ -364,6 +389,14 @@ export function AssessmentOverviewPage({ mode = 'overview' }) {
 
       if (action === 'reset') {
         await api.post(`/assessments/${assessment._id}/reset-attempts`);
+      }
+
+      if (action === 'send_students') {
+        await api.post(`/assessments/${assessment._id}/students/send-mail`);
+      }
+
+      if (action === 'send_proctors') {
+        await api.post(`/assessments/${assessment._id}/proctors/send-mail`);
       }
 
       setConfirmAction(null);
@@ -726,6 +759,30 @@ export function AssessmentOverviewPage({ mode = 'overview' }) {
                                 <CheckCircle2 size={14} className="text-brand-500" />
                                 {assessment.status === 'completed' ? 'Move to draft' : 'Mark complete'}
                               </button>
+                              {isPublishedForMail(assessment) ? (
+                                <>
+                                  <button
+                                    className="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-400 disabled:hover:bg-white"
+                                    type="button"
+                                    onClick={() => requestAction('send_students', assessment)}
+                                    disabled={!canSendAssessmentMail(assessment, 'students')}
+                                    title={canSendAssessmentMail(assessment, 'students') ? 'Send pending student credential mails' : 'No pending student mails'}
+                                  >
+                                    <Mail size={14} className={canSendAssessmentMail(assessment, 'students') ? 'text-brand-500' : 'text-slate-300'} />
+                                    Send mail to students
+                                  </button>
+                                  <button
+                                    className="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-400 disabled:hover:bg-white"
+                                    type="button"
+                                    onClick={() => requestAction('send_proctors', assessment)}
+                                    disabled={!canSendAssessmentMail(assessment, 'proctors')}
+                                    title={canSendAssessmentMail(assessment, 'proctors') ? 'Send pending proctor credential mails' : 'No pending proctor mails'}
+                                  >
+                                    <Mail size={14} className={canSendAssessmentMail(assessment, 'proctors') ? 'text-brand-500' : 'text-slate-300'} />
+                                    Send mail to proctors
+                                  </button>
+                                </>
+                              ) : null}
                               <button
                                 className="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-xs font-semibold text-red-700 hover:bg-red-50"
                                 type="button"
@@ -774,6 +831,31 @@ export function AssessmentOverviewPage({ mode = 'overview' }) {
                 <p className="mt-1 text-sm font-semibold text-slate-950">{confirmAction.assessment.title}</p>
                 <p className="text-xs text-slate-500">{confirmAction.assessment.assessmentCode}</p>
               </div>
+
+              {['send_students', 'send_proctors'].includes(confirmAction.action) ? (
+                <div className="grid gap-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm md:grid-cols-3">
+                  {(() => {
+                    const kind = confirmAction.action === 'send_students' ? 'students' : 'proctors';
+                    const summary = confirmAction.assessment.mailSummary?.[kind] || {};
+                    return (
+                      <>
+                        <div>
+                          <p className="text-xs font-semibold uppercase text-amber-700">Total</p>
+                          <p className="mt-1 text-lg font-semibold text-slate-950">{Number(summary.total || 0)}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs font-semibold uppercase text-amber-700">Already sent</p>
+                          <p className="mt-1 text-lg font-semibold text-slate-950">{Number(summary.sent || 0)}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs font-semibold uppercase text-amber-700">Pending</p>
+                          <p className="mt-1 text-lg font-semibold text-slate-950">{mailPendingCount(summary)}</p>
+                        </div>
+                      </>
+                    );
+                  })()}
+                </div>
+              ) : null}
 
             </div>
 

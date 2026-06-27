@@ -267,6 +267,60 @@ router.post('/auto-assign', requirePermission('proctor.add'), async (req, res, n
   }
 });
 
+router.post('/send-mail', requirePermission('mail.send'), async (req, res, next) => {
+  try {
+    const assessment = await findScopedAssessment(req);
+    if (!assessment) {
+      return res.status(404).json({ message: 'Assessment not found.' });
+    }
+
+    const proctors = await AssessmentProctor.find({ assessmentId: assessment._id }).select('+passwordPreview');
+    let sent = 0;
+    let failed = 0;
+    let skipped = 0;
+
+    for (const proctor of proctors) {
+      if (['sent', 'resent'].includes(proctor.mailStatus)) {
+        skipped += 1;
+        continue;
+      }
+
+      try {
+        await sendProctorCredentialMail({ assessment, proctor });
+        proctor.mailStatus = 'sent';
+        await proctor.save();
+        sent += 1;
+      } catch (mailError) {
+        proctor.mailStatus = 'failed';
+        await proctor.save().catch(() => null);
+        failed += 1;
+      }
+    }
+
+    await writeAuditLog(req, {
+      action: 'assessment.proctor.bulk_send_mail',
+      targetType: 'Assessment',
+      targetId: assessment._id,
+      newValue: {
+        sent,
+        failed,
+        skipped,
+        total: proctors.length,
+      },
+    });
+
+    return res.json({
+      message: sent > 0 ? 'Proctor credential mails sent successfully.' : 'No pending proctor mails were sent.',
+      sent,
+      failed,
+      skipped,
+      total: proctors.length,
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
 router.post('/:proctorId/send-mail', requirePermission('mail.send'), async (req, res, next) => {
   try {
     const assessment = await findScopedAssessment(req);

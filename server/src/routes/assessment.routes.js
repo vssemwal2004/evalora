@@ -1,5 +1,6 @@
 const express = require('express');
 const Assessment = require('../models/Assessment');
+const AssessmentAssignment = require('../models/AssessmentAssignment');
 const AssessmentProctor = require('../models/AssessmentProctor');
 const AssessmentQuestion = require('../models/AssessmentQuestion');
 const AssessmentStudent = require('../models/AssessmentStudent');
@@ -54,6 +55,42 @@ function serializeAssessment(assessment) {
     ...data,
     operationalStatus: deriveOperationalStatus(assessment),
   };
+}
+
+function emptyReviewSummary() {
+  return {
+    total: 0,
+    assigned: 0,
+    in_progress: 0,
+    submitted: 0,
+    rejected: 0,
+    approved: 0,
+    readyToPublish: false,
+  };
+}
+
+function buildReviewSummary(counts, assessmentId) {
+  const summary = emptyReviewSummary();
+  counts
+    .filter((item) => String(item._id.assessmentId) === String(assessmentId))
+    .forEach((item) => {
+      summary.total += item.count;
+      summary[item._id.status] = item.count;
+    });
+  summary.readyToPublish = summary.total > 0 && summary.approved === summary.total;
+  return summary;
+}
+
+async function getReviewSummary(assessmentId) {
+  const counts = await AssessmentAssignment.aggregate([
+    { $match: { assessmentId } },
+    { $group: { _id: { assessmentId: '$assessmentId', status: '$status' }, count: { $sum: 1 } } },
+  ]);
+  return buildReviewSummary(counts, assessmentId);
+}
+
+function assessmentNeedsReviewApproval(assessment) {
+  return assessment.questionSource !== 'admin';
 }
 
 function createDuplicateCode(code) {
@@ -133,7 +170,7 @@ router.get('/', requirePermission('assessment.view'), async (req, res, next) => 
     ]);
 
     const assessmentIds = items.map((assessment) => assessment._id);
-    const [studentMailCounts, proctorMailCounts] = assessmentIds.length > 0
+    const [studentMailCounts, proctorMailCounts, reviewCounts] = assessmentIds.length > 0
       ? await Promise.all([
         AssessmentStudent.aggregate([
           { $match: { assessmentId: { $in: assessmentIds } } },
@@ -143,8 +180,12 @@ router.get('/', requirePermission('assessment.view'), async (req, res, next) => 
           { $match: { assessmentId: { $in: assessmentIds } } },
           { $group: { _id: { assessmentId: '$assessmentId', mailStatus: '$mailStatus' }, count: { $sum: 1 } } },
         ]),
+        AssessmentAssignment.aggregate([
+          { $match: { assessmentId: { $in: assessmentIds } } },
+          { $group: { _id: { assessmentId: '$assessmentId', status: '$status' }, count: { $sum: 1 } } },
+        ]),
       ])
-      : [[], []];
+      : [[], [], []];
 
     const makeMailSummary = (counts, assessmentId) =>
       counts
@@ -167,6 +208,7 @@ router.get('/', requirePermission('assessment.view'), async (req, res, next) => 
           students: makeMailSummary(studentMailCounts, assessment._id),
           proctors: makeMailSummary(proctorMailCounts, assessment._id),
         },
+        reviewSummary: buildReviewSummary(reviewCounts, assessment._id),
       })),
       total,
       page,
@@ -196,6 +238,7 @@ router.post('/', requirePermission('assessment.create'), async (req, res, next) 
       instructions,
       internalNote,
       visibility = 'hidden',
+      questionSource = 'both',
       startAt,
       endAt,
       globalDurationMinutes,
@@ -206,6 +249,10 @@ router.post('/', requirePermission('assessment.create'), async (req, res, next) 
 
     if (!title || !assessmentCode) {
       return res.status(400).json({ message: 'Assessment title and code are required.' });
+    }
+
+    if (!['faculty', 'both', 'admin'].includes(questionSource)) {
+      return res.status(400).json({ message: 'Invalid question source.' });
     }
 
     const normalizedCourses = normalizeCourses(courses);
@@ -229,6 +276,7 @@ router.post('/', requirePermission('assessment.create'), async (req, res, next) 
       updatedBy: req.user._id,
       status,
       visibility,
+      questionSource,
       startAt: normalizeDateValue(startAt),
       endAt: normalizeDateValue(endAt),
       globalDurationMinutes: globalDurationMinutes ? Number(globalDurationMinutes) : undefined,
@@ -248,7 +296,12 @@ router.post('/', requirePermission('assessment.create'), async (req, res, next) 
       },
     });
 
-    return res.status(201).json({ assessment: serializeAssessment(assessment) });
+    return res.status(201).json({
+      assessment: {
+        ...serializeAssessment(assessment),
+        reviewSummary: emptyReviewSummary(),
+      },
+    });
   } catch (error) {
     if (error.code === 11000) {
       return res.status(409).json({ message: 'Assessment code already exists for this owner.' });
@@ -274,6 +327,7 @@ router.patch('/:id', requirePermission('assessment.edit'), async (req, res, next
       instructions,
       internalNote,
       visibility,
+      questionSource,
       startAt,
       endAt,
       globalDurationMinutes,
@@ -292,6 +346,10 @@ router.patch('/:id', requirePermission('assessment.edit'), async (req, res, next
 
     if (visibility && !['visible', 'hidden'].includes(visibility)) {
       return res.status(400).json({ message: 'Visibility must be visible or hidden.' });
+    }
+
+    if (questionSource && !['faculty', 'both', 'admin'].includes(questionSource)) {
+      return res.status(400).json({ message: 'Invalid question source.' });
     }
 
     if (status && !['draft', 'review', 'upcoming', 'active', 'pending', 'completed'].includes(status)) {
@@ -324,6 +382,7 @@ router.patch('/:id', requirePermission('assessment.edit'), async (req, res, next
     if (Object.prototype.hasOwnProperty.call(req.body, 'instructions')) assessment.instructions = instructions;
     if (Object.prototype.hasOwnProperty.call(req.body, 'internalNote')) assessment.internalNote = internalNote;
     if (Object.prototype.hasOwnProperty.call(req.body, 'visibility')) assessment.visibility = visibility;
+    if (Object.prototype.hasOwnProperty.call(req.body, 'questionSource')) assessment.questionSource = questionSource;
     if (Object.prototype.hasOwnProperty.call(req.body, 'status')) assessment.status = status;
     if (Object.prototype.hasOwnProperty.call(req.body, 'startAt')) assessment.startAt = normalizeDateValue(startAt);
     if (Object.prototype.hasOwnProperty.call(req.body, 'endAt')) assessment.endAt = normalizeDateValue(endAt);
@@ -337,6 +396,16 @@ router.patch('/:id', requirePermission('assessment.edit'), async (req, res, next
         ...settings,
         passwordRequired: false,
       };
+    }
+
+    if (assessment.status === 'pending' && assessment.visibility === 'visible' && assessmentNeedsReviewApproval(assessment)) {
+      const reviewSummary = await getReviewSummary(assessment._id);
+      if (!reviewSummary.readyToPublish) {
+        return res.status(400).json({
+          message: 'Moderator approval is required for every assigned course before this assessment can be published.',
+          reviewSummary,
+        });
+      }
     }
 
     assessment.updatedBy = req.user._id;
@@ -357,7 +426,12 @@ router.patch('/:id', requirePermission('assessment.edit'), async (req, res, next
       },
     });
 
-    return res.json({ assessment: serializeAssessment(assessment) });
+    return res.json({
+      assessment: {
+        ...serializeAssessment(assessment),
+        reviewSummary: await getReviewSummary(assessment._id),
+      },
+    });
   } catch (error) {
     if (error.code === 11000) {
       return res.status(409).json({ message: 'Assessment code already exists for this owner.' });
@@ -398,6 +472,7 @@ router.patch('/:id/visibility', requirePermission('assessment.hide'), async (req
       assessment: {
         ...assessment.toObject(),
         operationalStatus: deriveOperationalStatus(assessment),
+        reviewSummary: await getReviewSummary(assessment._id),
       },
     });
   } catch (error) {
@@ -421,6 +496,17 @@ router.patch('/:id/status', requirePermission('assessment.complete'), async (req
 
     const previousStatus = assessment.status;
     assessment.status = status;
+
+    if (assessment.status === 'pending' && assessmentNeedsReviewApproval(assessment)) {
+      const reviewSummary = await getReviewSummary(assessment._id);
+      if (!reviewSummary.readyToPublish) {
+        return res.status(400).json({
+          message: 'Moderator approval is required for every assigned course before this assessment can be published.',
+          reviewSummary,
+        });
+      }
+    }
+
     assessment.updatedBy = req.user._id;
     await assessment.save();
 
@@ -475,6 +561,7 @@ router.post('/:id/duplicate', requirePermission('assessment.duplicate'), async (
       updatedBy: req.user._id,
       status: 'draft',
       visibility: 'hidden',
+      questionSource: source.questionSource || 'both',
       startAt: source.startAt,
       endAt: source.endAt,
       globalDurationMinutes: source.globalDurationMinutes,
@@ -532,7 +619,12 @@ router.post('/:id/duplicate', requirePermission('assessment.duplicate'), async (
       },
     });
 
-    return res.status(201).json({ assessment: serializeAssessment(duplicate) });
+    return res.status(201).json({
+      assessment: {
+        ...serializeAssessment(duplicate),
+        reviewSummary: emptyReviewSummary(),
+      },
+    });
   } catch (error) {
     if (error.code === 11000) {
       return res.status(409).json({ message: 'Unable to generate a unique duplicate code. Try again.' });

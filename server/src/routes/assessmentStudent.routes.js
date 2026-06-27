@@ -612,6 +612,60 @@ router.delete('/:studentId', requirePermission('student.remove'), async (req, re
   }
 });
 
+router.post('/send-mail', requirePermission('mail.send'), async (req, res, next) => {
+  try {
+    const assessment = await findScopedAssessment(req);
+    if (!assessment) {
+      return res.status(404).json({ message: 'Assessment not found.' });
+    }
+
+    const students = await AssessmentStudent.find({ assessmentId: assessment._id }).select('+passwordPreview');
+    let sent = 0;
+    let failed = 0;
+    let skipped = 0;
+
+    for (const student of students) {
+      if (['sent', 'resent'].includes(student.mailStatus)) {
+        skipped += 1;
+        continue;
+      }
+
+      try {
+        await sendStudentCredentialMail({ assessment, student });
+        student.mailStatus = 'sent';
+        await student.save();
+        sent += 1;
+      } catch (mailError) {
+        student.mailStatus = 'failed';
+        await student.save().catch(() => null);
+        failed += 1;
+      }
+    }
+
+    await writeAuditLog(req, {
+      action: 'assessment.student.bulk_send_mail',
+      targetType: 'Assessment',
+      targetId: assessment._id,
+      newValue: {
+        sent,
+        failed,
+        skipped,
+        total: students.length,
+      },
+    });
+
+    return res.json({
+      message: sent > 0 ? 'Student credential mails sent successfully.' : 'No pending student mails were sent.',
+      sent,
+      failed,
+      skipped,
+      total: students.length,
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
 router.post('/:studentId/send-mail', requirePermission('mail.send'), async (req, res, next) => {
   try {
     const assessment = await findScopedAssessment(req);

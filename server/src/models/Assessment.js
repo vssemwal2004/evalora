@@ -131,6 +131,12 @@ const assessmentSchema = new mongoose.Schema(
       default: 'hidden',
       index: true,
     },
+    questionSource: {
+      type: String,
+      enum: ['faculty', 'both', 'admin'],
+      default: 'both',
+      index: true,
+    },
     startAt: Date,
     endAt: Date,
     globalDurationMinutes: {
