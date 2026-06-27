@@ -51,6 +51,12 @@ const userSchema = new mongoose.Schema(
       type: String,
       select: false,
     },
+    mustChangePassword: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+    passwordChangedAt: Date,
     role: {
       type: String,
       enum: Object.values(ROLES),

@@ -71,6 +71,8 @@ router.post('/admins', async (req, res, next) => {
         existing.loginId = normalizedEmail;
         existing.uniqueUsername = existing.uniqueUsername || normalizedEmail;
         existing.passwordHash = await User.hashPassword(password);
+        existing.mustChangePassword = true;
+        existing.passwordChangedAt = undefined;
         existing.role = ROLES.ADMIN;
         existing.status = 'active';
         existing.permissions = permissions;
@@ -122,6 +124,7 @@ router.post('/admins', async (req, res, next) => {
       passwordHash: await User.hashPassword(password),
       role: ROLES.ADMIN,
       permissions,
+      mustChangePassword: true,
     });
 
     await writeAuditLog(req, {
@@ -315,6 +318,34 @@ router.patch('/admins/:id/status', async (req, res, next) => {
     });
 
     return res.json({ admin });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.delete('/admins/:id', async (req, res, next) => {
+  try {
+    const admin = await User.findOne({ _id: req.params.id, role: ROLES.ADMIN });
+
+    if (!admin) {
+      return res.status(404).json({ message: 'Admin not found.' });
+    }
+
+    await User.deleteOne({ _id: admin._id });
+
+    await writeAuditLog(req, {
+      action: 'admin.delete',
+      targetType: 'User',
+      targetId: admin._id,
+      oldValue: {
+        name: admin.name,
+        email: admin.email,
+        status: admin.status,
+        permissions: admin.permissions,
+      },
+    });
+
+    return res.json({ message: 'Admin permanently deleted.' });
   } catch (error) {
     return next(error);
   }

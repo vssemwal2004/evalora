@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Check, Pencil, Search, ShieldCheck, UserPlus, Users, X } from 'lucide-react';
+import { Check, MoreVertical, Pencil, Search, ShieldCheck, Trash2, UserPlus, Users, UserX, X } from 'lucide-react';
 import { api } from '../../lib/api';
 import { EmptyState, PageHeader, SectionPanel } from '../../ui/Surface.jsx';
 
@@ -8,6 +8,7 @@ const defaultPermissions = [
   'assessment.view',
   'assessment.create',
   'assessment.edit',
+  'student.view',
   'student.add',
   'proctor.add',
   'library.view',
@@ -20,8 +21,56 @@ function statusClass(status) {
   return `status-badge status-${String(status || '').replace(/\s+/g, '_')}`;
 }
 
+const permissionLabels = {
+  'dashboard.view': 'View dashboard',
+  'assessment.view': 'View assessments',
+  'assessment.create': 'Create assessments',
+  'assessment.edit': 'Edit assessments',
+  'assessment.delete': 'Delete assessments',
+  'assessment.duplicate': 'Duplicate assessments',
+  'assessment.hide': 'Hide or show assessments',
+  'assessment.reset': 'Reset exam attempts',
+  'assessment.complete': 'Mark assessments complete',
+  'course.view': 'View courses',
+  'course.create': 'Create courses',
+  'course.edit': 'Edit courses',
+  'course.archive': 'Hide/archive courses',
+  'faculty.view': 'View own faculty',
+  'faculty.view.all': 'View all faculty',
+  'faculty.create': 'Create faculty',
+  'faculty.edit': 'Edit faculty',
+  'faculty.remove': 'Delete faculty',
+  'moderator.view': 'View own moderators',
+  'moderator.view.all': 'View all moderators',
+  'moderator.create': 'Create moderators',
+  'moderator.edit': 'Edit moderators',
+  'moderator.remove': 'Delete moderators',
+  'student.view': 'View student directory',
+  'student.add': 'Add assessment students',
+  'student.edit': 'Edit, enable, or disable students',
+  'student.remove': 'Delete students',
+  'student.credential.regenerate': 'Regenerate student credentials',
+  'proctor.add': 'Add proctors',
+  'proctor.edit': 'Edit proctors',
+  'proctor.remove': 'Delete proctors',
+  'library.view': 'View question library',
+  'library.create': 'Create library questions',
+  'library.edit': 'Edit library questions',
+  'library.archive': 'Archive library questions',
+  'mail.send': 'Send emails',
+  'mail.logs.view': 'View email logs',
+  'reports.view': 'View reports',
+  'reports.export': 'Export reports',
+  'ufm.view': 'View UFM cases',
+  'ufm.reverse': 'Reverse UFM cases',
+  'settings.manage': 'Manage settings',
+  'audit.view': 'View audit logs',
+  'activity.faculty.view': 'View faculty activity',
+  'activity.moderator.view': 'View moderator activity',
+};
+
 function formatPermission(permission) {
-  return permission
+  return permissionLabels[permission] || permission
     .split('.')
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(' / ');
@@ -41,6 +90,37 @@ function mergeUniquePermissions(currentPermissions, permissionsToAdd) {
   return Array.from(new Set([...(currentPermissions || []), ...(permissionsToAdd || [])]));
 }
 
+function DeleteAdminModal({ admin, isSaving, onCancel, onConfirm }) {
+  if (!admin) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/40 px-4 py-6">
+      <div className="w-full max-w-md overflow-hidden rounded-lg border border-red-200 bg-white shadow-2xl">
+        <div className="flex items-start gap-3 border-b border-red-100 bg-red-50 px-5 py-4">
+          <span className="grid h-10 w-10 shrink-0 place-items-center rounded-md border border-red-200 bg-white text-red-600">
+            <Trash2 size={18} />
+          </span>
+          <div>
+            <p className="text-base font-semibold text-slate-950">Delete admin permanently?</p>
+            <p className="mt-1 text-sm leading-5 text-red-700">This removes {admin.name} from the database and cannot be undone.</p>
+          </div>
+        </div>
+        <div className="space-y-2 p-5 text-sm text-slate-600">
+          <p><span className="font-semibold text-slate-900">Name:</span> {admin.name}</p>
+          <p><span className="font-semibold text-slate-900">Email:</span> {admin.email}</p>
+        </div>
+        <div className="flex justify-end gap-2 border-t border-slate-200 bg-slate-50 px-5 py-4">
+          <button className="secondary-button" type="button" onClick={onCancel} disabled={isSaving}>Cancel</button>
+          <button className="primary-button bg-red-600 hover:bg-red-700 focus:ring-red-100" type="button" onClick={onConfirm} disabled={isSaving}>
+            <Trash2 size={16} />
+            {isSaving ? 'Deleting' : 'Delete admin'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function ManageAdminsPage({ mode = 'all' }) {
   const [admins, setAdmins] = useState([]);
   const [availablePermissions, setAvailablePermissions] = useState([]);
@@ -50,6 +130,8 @@ export function ManageAdminsPage({ mode = 'all' }) {
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState('');
   const [editAdminId, setEditAdminId] = useState('');
+  const [openMenu, setOpenMenu] = useState(null);
+  const [deleteAdmin, setDeleteAdmin] = useState(null);
   const [form, setForm] = useState({
     name: '',
     email: '',
@@ -221,11 +303,43 @@ export function ManageAdminsPage({ mode = 'all' }) {
 
   async function updateStatus(admin, nextStatus) {
     setError('');
-    await api.patch(`/super-admin/admins/${admin._id}/status`, {
-      status: nextStatus,
-      reason: `Status changed to ${nextStatus}`,
-    });
-    await loadAdmins();
+    try {
+      await api.patch(`/super-admin/admins/${admin._id}/status`, {
+        status: nextStatus,
+        reason: `Status changed to ${nextStatus}`,
+      });
+      await loadAdmins();
+    } catch (requestError) {
+      setError(requestError.response?.data?.message || 'Unable to update admin status.');
+    }
+  }
+
+  async function deleteSelectedAdmin() {
+    if (!deleteAdmin) return;
+    setIsSaving(true);
+    setError('');
+
+    try {
+      await api.delete(`/super-admin/admins/${deleteAdmin._id}`);
+      setDeleteAdmin(null);
+      await loadAdmins();
+    } catch (requestError) {
+      setError(requestError.response?.data?.message || 'Unable to delete admin.');
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  function openActionMenu(event, admin) {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const menuWidth = 196;
+    const top = Math.min(rect.bottom + 6, window.innerHeight - 206);
+    const left = Math.max(12, Math.min(rect.right - menuWidth, window.innerWidth - menuWidth - 12));
+    setOpenMenu((current) => (current?.id === admin._id ? null : { id: admin._id, admin, top, left }));
+  }
+
+  function closeActionMenu() {
+    setOpenMenu(null);
   }
 
   async function handleEditAdminSubmit(event) {
@@ -256,7 +370,7 @@ export function ManageAdminsPage({ mode = 'all' }) {
 
       <div className={`grid gap-5 ${showCreate && showList ? 'xl:grid-cols-[420px_1fr]' : ''}`}>
         {showCreate ? (
-        <SectionPanel title="Create Admin" description="Temporary password can be changed later by the assigned admin." icon={UserPlus}>
+        <SectionPanel title="Create Admin" description="The assigned admin must change this temporary password on first login." icon={UserPlus}>
           <form className="space-y-4 p-5" onSubmit={handleCreateAdmin}>
             <div>
               <label className="field-label" htmlFor="admin-name">
@@ -535,27 +649,10 @@ export function ManageAdminsPage({ mode = 'all' }) {
                       <td className="text-slate-500">
                         {admin.lastLoginAt ? new Date(admin.lastLoginAt).toLocaleString() : 'Never'}
                       </td>
-                      <td>
-                        <div className="flex gap-2">
-                          <button className="secondary-button h-8 px-2 text-xs" type="button" onClick={() => startEditing(admin)}>
-                            <Pencil size={13} />
-                            Edit
-                          </button>
-                          <button
-                            className="secondary-button h-8 px-2 text-xs"
-                            type="button"
-                            onClick={() => updateStatus(admin, admin.status === 'active' ? 'inactive' : 'active')}
-                          >
-                            {admin.status === 'active' ? 'Disable' : 'Activate'}
-                          </button>
-                          <button
-                            className="secondary-button h-8 px-2 text-xs"
-                            type="button"
-                            onClick={() => updateStatus(admin, 'blocked')}
-                          >
-                            Block
-                          </button>
-                        </div>
+                      <td className="text-right">
+                        <button className="secondary-button h-8 w-8 px-0" type="button" onClick={(event) => openActionMenu(event, admin)} aria-label="Open admin actions">
+                          <MoreVertical size={16} className="text-brand-500" />
+                        </button>
                       </td>
                     </tr>
                   ))
@@ -566,6 +663,36 @@ export function ManageAdminsPage({ mode = 'all' }) {
         </SectionPanel>
         ) : null}
       </div>
+
+      {openMenu ? (
+        <>
+          <button className="fixed inset-0 z-40 cursor-default bg-transparent" type="button" aria-label="Close actions" onClick={closeActionMenu} />
+          <div
+            className="fixed z-50 rounded-md border border-slate-200 bg-white p-1 text-left shadow-xl"
+            style={{ top: openMenu.top, left: openMenu.left, width: 196 }}
+          >
+            <button className="flex w-full items-center gap-2 rounded px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50" type="button" onClick={() => { startEditing(openMenu.admin); closeActionMenu(); }}>
+              <Pencil size={14} /> Edit
+            </button>
+            <button className="flex w-full items-center gap-2 rounded px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50" type="button" onClick={() => { updateStatus(openMenu.admin, openMenu.admin.status === 'active' ? 'inactive' : 'active'); closeActionMenu(); }}>
+              <UserX size={14} /> {openMenu.admin.status === 'active' ? 'Disable' : 'Activate'}
+            </button>
+            <button className="flex w-full items-center gap-2 rounded px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50" type="button" onClick={() => { updateStatus(openMenu.admin, 'blocked'); closeActionMenu(); }}>
+              <ShieldCheck size={14} /> Block
+            </button>
+            <button className="flex w-full items-center gap-2 rounded px-3 py-2 text-sm font-semibold text-red-700 hover:bg-red-50" type="button" onClick={() => { setDeleteAdmin(openMenu.admin); closeActionMenu(); }}>
+              <Trash2 size={14} /> Delete Admin
+            </button>
+          </div>
+        </>
+      ) : null}
+
+      <DeleteAdminModal
+        admin={deleteAdmin}
+        isSaving={isSaving}
+        onCancel={() => setDeleteAdmin(null)}
+        onConfirm={deleteSelectedAdmin}
+      />
     </section>
   );
 }

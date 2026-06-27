@@ -9,6 +9,7 @@ const { ROLES } = require('../constants/roles');
 const { signAssignmentToken, verifyAssignmentToken } = require('../utils/tokens');
 const { normalizeQuestionPayload } = require('../utils/questionValidation');
 const { sendAssignmentMail } = require('../services/credentialMail.service');
+const { writeAuditLog } = require('../services/audit.service');
 
 const router = express.Router();
 router.use(authenticate, requireRole(ROLES.FACULTY, ROLES.MODERATOR));
@@ -60,6 +61,17 @@ router.post('/:id/unlock', async (req, res, next) => {
       assignment.status = 'in_progress';
       assignment.history.push({ action: 'opened', actorId: req.user._id, actorName: req.user.name });
       await assignment.save();
+      await writeAuditLog(req, {
+        action: 'work.opened',
+        targetType: 'AssessmentAssignment',
+        targetId: assignment._id,
+        newValue: {
+          assessmentId: assignment.assessmentId,
+          courseName: assignment.courseName,
+          courseId: assignment.courseId,
+          status: assignment.status,
+        },
+      });
     }
     return res.json({ token: signAssignmentToken({ assignmentId: assignment._id, userId: req.user._id, role: req.user.role }) });
   } catch (error) { return next(error); }
@@ -94,6 +106,17 @@ router.post('/:id/questions/import', async (req, res, next) => {
       createdBy: req.user._id, libraryQuestionId: q._id, sourcePaperHeading: q.paperHeading,
       courseName: assignment.courseName, courseId: assignment.courseId,
     })));
+    await writeAuditLog(req, {
+      action: 'work.question.import',
+      targetType: 'AssessmentAssignment',
+      targetId: assignment._id,
+      newValue: {
+        assessmentId: assignment.assessmentId,
+        courseName: assignment.courseName,
+        courseId: assignment.courseId,
+        imported: created.length,
+      },
+    });
     return res.status(201).json({ items: created, imported: created.length });
   } catch (error) { return next(error); }
 });
@@ -107,6 +130,18 @@ router.patch('/:id/questions/:questionId', async (req, res, next) => {
     if (!question) return res.status(404).json({ message: 'Question not found.' });
     question.set(normalizeQuestionPayload({ ...question.toObject(), ...req.body, courseName: assignment.courseName, courseId: assignment.courseId }));
     await question.save();
+    await writeAuditLog(req, {
+      action: 'work.question.update',
+      targetType: 'AssessmentQuestion',
+      targetId: question._id,
+      newValue: {
+        assessmentId: assignment.assessmentId,
+        courseName: assignment.courseName,
+        courseId: assignment.courseId,
+        type: question.type,
+        difficulty: question.difficulty,
+      },
+    });
     return res.json({ question });
   } catch (error) { return next(error); }
 });
@@ -126,6 +161,20 @@ router.post('/:id/submit', async (req, res, next) => {
       assignment.moderatorMail = { status: 'sent', sentAt: new Date() };
     } catch (error) { assignment.moderatorMail = { status: 'failed', error: error.message }; }
     await assignment.save();
+    await writeAuditLog(req, {
+      action: 'work.submit',
+      targetType: 'AssessmentAssignment',
+      targetId: assignment._id,
+      newValue: {
+        assessmentId: assignment.assessmentId,
+        courseName: assignment.courseName,
+        courseId: assignment.courseId,
+        questionCount: count,
+        moderatorId: assignment.moderatorId,
+        moderatorMailStatus: assignment.moderatorMail?.status,
+      },
+      reason: String(req.body.message || '').trim(),
+    });
     return res.json({ assignment: serialize(assignment) });
   } catch (error) { return next(error); }
 });
@@ -144,6 +193,19 @@ router.post('/:id/decision', async (req, res, next) => {
       try { await sendAssignmentMail({ assignment, assessment, recipient: faculty, assignedBy: req.user, kind: 'rejected', reason }); } catch (error) { assignment.facultyMail = { status: 'failed', error: error.message }; }
     }
     await assignment.save();
+    await writeAuditLog(req, {
+      action: decision === 'approve' ? 'work.approve' : 'work.reject',
+      targetType: 'AssessmentAssignment',
+      targetId: assignment._id,
+      newValue: {
+        assessmentId: assignment.assessmentId,
+        courseName: assignment.courseName,
+        courseId: assignment.courseId,
+        facultyId: assignment.facultyId,
+        status: assignment.status,
+      },
+      reason,
+    });
     return res.json({ assignment: serialize(assignment) });
   } catch (error) { return next(error); }
 });

@@ -24,7 +24,7 @@ function getScopedQuery(req) {
 }
 
 function deriveOperationalStatus(assessment) {
-  if (assessment.status === 'draft' || assessment.status === 'completed') {
+  if (assessment.status === 'draft' || assessment.status === 'review' || assessment.status === 'completed') {
     return assessment.status;
   }
 
@@ -49,11 +49,9 @@ function deriveOperationalStatus(assessment) {
 
 function serializeAssessment(assessment) {
   const data = assessment.toObject();
-  const hasCommonAssessmentPassword = Boolean(data.commonAssessmentPasswordHash);
   delete data.commonAssessmentPasswordHash;
   return {
     ...data,
-    hasCommonAssessmentPassword,
     operationalStatus: deriveOperationalStatus(assessment),
   };
 }
@@ -85,15 +83,9 @@ function normalizeCourses(courses) {
     }));
 }
 
-async function findScopedAssessment(req, options = {}) {
+async function findScopedAssessment(req) {
   const query = { _id: req.params.id, ...getScopedQuery(req) };
-  const finder = Assessment.findOne(query);
-
-  if (options.includePasswordHash) {
-    finder.select('+commonAssessmentPasswordHash');
-  }
-
-  return finder;
+  return Assessment.findOne(query);
 }
 
 router.get('/', requirePermission('assessment.view'), async (req, res, next) => {
@@ -129,6 +121,7 @@ router.get('/', requirePermission('assessment.view'), async (req, res, next) => 
     const [items, total, statusCounts] = await Promise.all([
       Assessment.find(query)
         .populate('ownerAdminId', 'name email')
+        .populate('createdBy', 'name email role')
         .sort({ createdAt: -1 })
         .skip((page - 1) * limit)
         .limit(limit),
@@ -139,10 +132,41 @@ router.get('/', requirePermission('assessment.view'), async (req, res, next) => 
       ]),
     ]);
 
+    const assessmentIds = items.map((assessment) => assessment._id);
+    const [studentMailCounts, proctorMailCounts] = assessmentIds.length > 0
+      ? await Promise.all([
+        AssessmentStudent.aggregate([
+          { $match: { assessmentId: { $in: assessmentIds } } },
+          { $group: { _id: { assessmentId: '$assessmentId', mailStatus: '$mailStatus' }, count: { $sum: 1 } } },
+        ]),
+        AssessmentProctor.aggregate([
+          { $match: { assessmentId: { $in: assessmentIds } } },
+          { $group: { _id: { assessmentId: '$assessmentId', mailStatus: '$mailStatus' }, count: { $sum: 1 } } },
+        ]),
+      ])
+      : [[], []];
+
+    const makeMailSummary = (counts, assessmentId) =>
+      counts
+        .filter((item) => String(item._id.assessmentId) === String(assessmentId))
+        .reduce(
+          (acc, item) => {
+            acc.total += item.count;
+            acc[item._id.mailStatus] = item.count;
+            if (['sent', 'resent'].includes(item._id.mailStatus)) acc.sent += item.count;
+            return acc;
+          },
+          { total: 0, sent: 0, not_sent: 0, queued: 0, failed: 0, resent: 0 }
+        );
+
     res.json({
       items: items.map((assessment) => ({
         ...assessment.toObject(),
         operationalStatus: deriveOperationalStatus(assessment),
+        mailSummary: {
+          students: makeMailSummary(studentMailCounts, assessment._id),
+          proctors: makeMailSummary(proctorMailCounts, assessment._id),
+        },
       })),
       total,
       page,
@@ -154,7 +178,7 @@ router.get('/', requirePermission('assessment.view'), async (req, res, next) => 
           acc.all += item.count;
           return acc;
         },
-        { all: 0, draft: 0, upcoming: 0, active: 0, pending: 0, completed: 0 }
+        { all: 0, draft: 0, review: 0, upcoming: 0, active: 0, pending: 0, completed: 0 }
       ),
     });
   } catch (error) {
@@ -175,7 +199,6 @@ router.post('/', requirePermission('assessment.create'), async (req, res, next) 
       startAt,
       endAt,
       globalDurationMinutes,
-      commonAssessmentPassword,
       courses = [],
       settings = {},
       status = 'draft',
@@ -200,17 +223,17 @@ router.post('/', requirePermission('assessment.create'), async (req, res, next) 
       internalNote,
       ownerAdminId: req.user._id,
       createdBy: req.user._id,
+      createdByName: req.user.name,
+      createdByEmail: req.user.email,
+      createdByRole: req.user.role,
       updatedBy: req.user._id,
       status,
       visibility,
       startAt: normalizeDateValue(startAt),
       endAt: normalizeDateValue(endAt),
       globalDurationMinutes: globalDurationMinutes ? Number(globalDurationMinutes) : undefined,
-      commonAssessmentPasswordHash: commonAssessmentPassword
-        ? await Assessment.hashPassword(commonAssessmentPassword)
-        : undefined,
       courses: normalizedCourses,
-      settings,
+      settings: { ...settings, passwordRequired: false },
     });
 
     await writeAuditLog(req, {
@@ -237,7 +260,7 @@ router.post('/', requirePermission('assessment.create'), async (req, res, next) 
 
 router.patch('/:id', requirePermission('assessment.edit'), async (req, res, next) => {
   try {
-    const assessment = await findScopedAssessment(req, { includePasswordHash: true });
+    const assessment = await findScopedAssessment(req);
 
     if (!assessment) {
       return res.status(404).json({ message: 'Assessment not found.' });
@@ -254,7 +277,6 @@ router.patch('/:id', requirePermission('assessment.edit'), async (req, res, next
       startAt,
       endAt,
       globalDurationMinutes,
-      commonAssessmentPassword,
       courses,
       settings,
       status,
@@ -272,7 +294,7 @@ router.patch('/:id', requirePermission('assessment.edit'), async (req, res, next
       return res.status(400).json({ message: 'Visibility must be visible or hidden.' });
     }
 
-    if (status && !['draft', 'upcoming', 'active', 'pending', 'completed'].includes(status)) {
+    if (status && !['draft', 'review', 'upcoming', 'active', 'pending', 'completed'].includes(status)) {
       return res.status(400).json({ message: 'Invalid assessment status.' });
     }
 
@@ -309,21 +331,18 @@ router.patch('/:id', requirePermission('assessment.edit'), async (req, res, next
       assessment.globalDurationMinutes = Number(globalDurationMinutes);
     }
 
-    if (commonAssessmentPassword) {
-      assessment.commonAssessmentPasswordHash = await Assessment.hashPassword(commonAssessmentPassword);
-    }
-
     if (settings && typeof settings === 'object') {
       assessment.settings = {
         ...(assessment.settings || {}),
         ...settings,
+        passwordRequired: false,
       };
     }
 
     assessment.updatedBy = req.user._id;
     await assessment.save();
 
-    if (assessment.status === 'pending' && assessment.visibility === 'visible') {
+    if (assessment.status === 'review' || (assessment.status === 'pending' && assessment.visibility === 'visible')) {
       await syncAssessmentAssignments(assessment, req.user);
     }
 
@@ -390,7 +409,7 @@ router.patch('/:id/status', requirePermission('assessment.complete'), async (req
   try {
     const status = String(req.body.status || '').trim();
 
-    if (!['draft', 'upcoming', 'active', 'pending', 'completed'].includes(status)) {
+    if (!['draft', 'review', 'upcoming', 'active', 'pending', 'completed'].includes(status)) {
       return res.status(400).json({ message: 'Invalid assessment status.' });
     }
 
@@ -404,6 +423,10 @@ router.patch('/:id/status', requirePermission('assessment.complete'), async (req
     assessment.status = status;
     assessment.updatedBy = req.user._id;
     await assessment.save();
+
+    if (assessment.status === 'review') {
+      await syncAssessmentAssignments(assessment, req.user);
+    }
 
     await writeAuditLog(req, {
       action: 'assessment.status.update',
@@ -424,40 +447,13 @@ router.patch('/:id/status', requirePermission('assessment.complete'), async (req
   }
 });
 
-router.patch('/:id/password', requirePermission('assessment.edit'), async (req, res, next) => {
-  try {
-    const password = String(req.body.password || '').trim();
-
-    if (password.length < 4) {
-      return res.status(400).json({ message: 'Assessment password must be at least 4 characters.' });
-    }
-
-    const assessment = await findScopedAssessment(req);
-
-    if (!assessment) {
-      return res.status(404).json({ message: 'Assessment not found.' });
-    }
-
-    assessment.commonAssessmentPasswordHash = await Assessment.hashPassword(password);
-    assessment.updatedBy = req.user._id;
-    await assessment.save();
-
-    await writeAuditLog(req, {
-      action: 'assessment.password.update',
-      targetType: 'Assessment',
-      targetId: assessment._id,
-      newValue: { passwordUpdated: true },
-    });
-
-    return res.json({ message: 'Assessment password updated.' });
-  } catch (error) {
-    return next(error);
-  }
+router.patch('/:id/password', requirePermission('assessment.edit'), (_req, res) => {
+  return res.status(410).json({ message: 'Common assessment passwords are no longer used. Each user receives a unique password.' });
 });
 
 router.post('/:id/duplicate', requirePermission('assessment.duplicate'), async (req, res, next) => {
   try {
-    const assessment = await findScopedAssessment(req, { includePasswordHash: true });
+    const assessment = await findScopedAssessment(req);
 
     if (!assessment) {
       return res.status(404).json({ message: 'Assessment not found.' });
@@ -473,13 +469,15 @@ router.post('/:id/duplicate', requirePermission('assessment.duplicate'), async (
       internalNote: source.internalNote,
       ownerAdminId: req.user.role === ROLES.SUPER_ADMIN ? source.ownerAdminId : req.user._id,
       createdBy: req.user._id,
+      createdByName: req.user.name,
+      createdByEmail: req.user.email,
+      createdByRole: req.user.role,
       updatedBy: req.user._id,
       status: 'draft',
       visibility: 'hidden',
       startAt: source.startAt,
       endAt: source.endAt,
       globalDurationMinutes: source.globalDurationMinutes,
-      commonAssessmentPasswordHash: source.commonAssessmentPasswordHash,
       courses: (source.courses || []).map((course) => ({
         courseName: course.courseName,
         courseId: course.courseId,
@@ -626,8 +624,8 @@ router.delete('/:id', requirePermission('assessment.delete'), async (req, res, n
 router.get('/:id', requirePermission('assessment.view'), async (req, res, next) => {
   try {
     const assessment = await Assessment.findOne({ _id: req.params.id, ...getScopedQuery(req) })
-      .select('+commonAssessmentPasswordHash')
-      .populate('ownerAdminId', 'name email');
+      .populate('ownerAdminId', 'name email')
+      .populate('createdBy', 'name email role');
 
     if (!assessment) {
       return res.status(404).json({ message: 'Assessment not found.' });

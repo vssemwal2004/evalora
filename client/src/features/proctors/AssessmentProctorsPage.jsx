@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { KeyRound, Mail, Plus, RefreshCw, ShieldCheck, UserRoundCheck } from 'lucide-react';
+import { Copy, KeyRound, Mail, MoreHorizontal, Plus, RefreshCw, ShieldCheck, UserRoundCheck } from 'lucide-react';
 import { api } from '../../lib/api';
 import { EmptyState, MetricCard, PageHeader, SectionPanel } from '../../ui/Surface.jsx';
 
@@ -29,7 +29,10 @@ export function AssessmentProctorsPage({ assessmentId: assessmentIdProp, embedde
   const [isSaving, setIsSaving] = useState(false);
   const [isAssigning, setIsAssigning] = useState(false);
   const [sendingMailId, setSendingMailId] = useState('');
+  const [openActionMenu, setOpenActionMenu] = useState('');
+  const [actionMenuPosition, setActionMenuPosition] = useState({ top: 0, left: 0 });
   const [error, setError] = useState('');
+  const [activeView, setActiveView] = useState(embedded ? 'add' : 'directory');
 
   const loadAssessment = useCallback(async () => {
     const response = await api.get(`/assessments/${assessmentId}`);
@@ -75,6 +78,19 @@ export function AssessmentProctorsPage({ assessmentId: assessmentIdProp, embedde
     setForm((current) => ({ ...current, [field]: value }));
   }
 
+  function toggleActionMenu(event, proctorId) {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const menuWidth = 176;
+    const menuHeight = 132;
+    const gap = 8;
+    const hasRoomBelow = window.innerHeight - rect.bottom >= menuHeight + gap;
+    const top = hasRoomBelow ? rect.bottom + gap : Math.max(gap, rect.top - menuHeight - gap);
+    const left = Math.min(Math.max(gap, rect.right - menuWidth), window.innerWidth - menuWidth - gap);
+
+    setActionMenuPosition({ top, left });
+    setOpenActionMenu((current) => (current === proctorId ? '' : proctorId));
+  }
+
   async function handleSubmit(event) {
     event.preventDefault();
     setError('');
@@ -86,6 +102,7 @@ export function AssessmentProctorsPage({ assessmentId: assessmentIdProp, embedde
       setCreatedCredential(response.data.proctor);
       setForm(initialForm);
       await Promise.all([loadProctors(), loadAssessment()]);
+      setActiveView('directory');
     } catch (requestError) {
       setError(requestError.response?.data?.message || 'Unable to add proctor.');
     } finally {
@@ -110,6 +127,7 @@ export function AssessmentProctorsPage({ assessmentId: assessmentIdProp, embedde
       const response = await api.post(`/assessments/${assessmentId}/proctors/auto-assign`, { capacity });
       setPlan(response.data.plan);
       await loadProctors();
+      setActiveView('directory');
     } catch (requestError) {
       setError(requestError.response?.data?.message || 'Unable to auto-assign students.');
       if (requestError.response?.data?.plan) setPlan(requestError.response.data.plan);
@@ -119,8 +137,13 @@ export function AssessmentProctorsPage({ assessmentId: assessmentIdProp, embedde
   }
 
   async function sendMail(proctor) {
+    if (['sent', 'resent'].includes(proctor.mailStatus)) {
+      return;
+    }
+
     setSendingMailId(proctor._id);
     setError('');
+    setOpenActionMenu('');
     try {
       await api.post(`/assessments/${assessmentId}/proctors/${proctor._id}/send-mail`);
       await loadProctors();
@@ -129,6 +152,17 @@ export function AssessmentProctorsPage({ assessmentId: assessmentIdProp, embedde
     } finally {
       setSendingMailId('');
     }
+  }
+
+  async function copyText(value, label) {
+    if (!value) return;
+    try {
+      await navigator.clipboard.writeText(String(value));
+      setError('');
+    } catch {
+      setError(`Unable to copy ${label}.`);
+    }
+    setOpenActionMenu('');
   }
 
   return (
@@ -163,11 +197,36 @@ export function AssessmentProctorsPage({ assessmentId: assessmentIdProp, embedde
         </div>
       ) : null}
 
-      <div className={embedded ? 'grid gap-5 xl:grid-cols-[410px_1fr]' : 'space-y-5'}>
-        {embedded ? (
-          <div className="space-y-5">
-            <SectionPanel title="Add Proctor" description="Generated proctor credentials are unique for this assessment." icon={UserRoundCheck}>
-              <form className="space-y-4 p-5" onSubmit={handleSubmit}>
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2 shadow-sm">
+        <div>
+          <p className="field-label text-brand-600">Proctor Phase</p>
+          <p className="mt-1 text-xs font-semibold text-slate-700">
+            {activeView === 'add' ? 'Add proctors and plan student distribution.' : 'View proctors, credentials, assigned students, and mail status.'}
+          </p>
+        </div>
+        <div className="inline-flex rounded-md border border-slate-200 bg-slate-50 p-1">
+          {[
+            ['add', 'Add Proctor'],
+            ['directory', 'Proctor Directory'],
+          ].map(([view, label]) => (
+            <button
+              key={view}
+              className={`h-8 rounded px-3 text-xs font-semibold transition ${activeView === view ? 'bg-white text-brand-700 shadow-sm' : 'text-slate-500 hover:text-slate-900'}`}
+              type="button"
+              onClick={() => setActiveView(view)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className={embedded ? 'space-y-4' : 'space-y-5'}>
+        {activeView === 'add' ? (
+          <div className="grid gap-4 xl:grid-cols-2">
+            <SectionPanel title="Add Proctor" description="Creates one unique proctor credential." icon={UserRoundCheck}>
+              <form className="space-y-3 p-4" onSubmit={handleSubmit}>
+                <div className="grid gap-3 md:grid-cols-2">
                 <div>
                   <label className="field-label">Proctor name</label>
                   <input className="field-input mt-2" value={form.name} onChange={(event) => updateForm('name', event.target.value)} required />
@@ -182,6 +241,8 @@ export function AssessmentProctorsPage({ assessmentId: assessmentIdProp, embedde
                     required
                   />
                 </div>
+                </div>
+                <div className="grid gap-3 md:grid-cols-2">
                 <div>
                   <label className="field-label">Phone</label>
                   <input className="field-input mt-2" value={form.phone} onChange={(event) => updateForm('phone', event.target.value)} />
@@ -194,6 +255,7 @@ export function AssessmentProctorsPage({ assessmentId: assessmentIdProp, embedde
                     onChange={(event) => updateForm('department', event.target.value)}
                   />
                 </div>
+                </div>
                 <button className="primary-button w-full" type="submit" disabled={isSaving}>
                   <Plus size={16} />
                   {isSaving ? 'Adding proctor' : 'Add Proctor'}
@@ -201,8 +263,9 @@ export function AssessmentProctorsPage({ assessmentId: assessmentIdProp, embedde
               </form>
             </SectionPanel>
 
-            <SectionPanel title="Auto Assignment" description="Plan student distribution before committing assignments." icon={ShieldCheck}>
-              <div className="space-y-4 p-5">
+            <SectionPanel title="Auto Assignment" description="Plan student distribution before committing." icon={ShieldCheck}>
+              <div className="space-y-3 p-4">
+                <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
                 <div>
                   <label className="field-label">Students per proctor</label>
                   <input
@@ -215,14 +278,15 @@ export function AssessmentProctorsPage({ assessmentId: assessmentIdProp, embedde
                   />
                   <p className="mt-2 text-xs text-slate-500">Recommended maximum is 50 students per proctor.</p>
                 </div>
-                <div className="grid grid-cols-2 gap-2">
-                  <button className="secondary-button" type="button" onClick={calculatePlan}>
+                <div className="grid grid-cols-2 gap-2 self-end">
+                  <button className="secondary-button px-3" type="button" onClick={calculatePlan}>
                     Plan
                   </button>
-                  <button className="primary-button" type="button" onClick={autoAssign} disabled={isAssigning}>
+                  <button className="primary-button px-3" type="button" onClick={autoAssign} disabled={isAssigning}>
                     <RefreshCw size={16} />
                     {isAssigning ? 'Assigning' : 'Assign'}
                   </button>
+                </div>
                 </div>
                 {plan ? (
                   <div className="border border-slate-200 bg-slate-50 p-3 text-xs leading-5 text-slate-700">
@@ -238,15 +302,25 @@ export function AssessmentProctorsPage({ assessmentId: assessmentIdProp, embedde
           </div>
         ) : null}
 
-        <SectionPanel title="Proctor Directory" description="Review generated credentials, mail status, and assigned student load.">
-          <div className="grid gap-3 border-b border-slate-200 bg-slate-50/60 p-4 md:grid-cols-4">
+        {activeView === 'directory' ? (
+          <SectionPanel
+            title="Proctor Directory"
+            description="Compact credential, mail, and load tracking."
+            actions={
+            <button className="secondary-button h-9 px-3 text-xs" type="button" onClick={() => setActiveView('add')}>
+              <Plus size={14} className="text-brand-500" />
+              Add Proctor
+            </button>
+            }
+          >
+          <div className="grid gap-2 border-b border-slate-200 bg-slate-50/60 p-3 md:grid-cols-4">
             <MetricCard label="Eligible students" value={summary?.totalEligibleStudents ?? 0} />
             <MetricCard label="Assigned" value={summary?.assignedStudents ?? 0} />
             <MetricCard label="Unassigned" value={summary?.unassignedStudents ?? 0} tone="warning" />
             <MetricCard label="Proctors" value={summary?.totalProctors ?? 0} />
           </div>
 
-          <div className="overflow-x-auto">
+          <div className="table-popover-safe">
             <table className="data-table">
               <thead>
                 <tr>
@@ -256,7 +330,7 @@ export function AssessmentProctorsPage({ assessmentId: assessmentIdProp, embedde
                   <th>Assigned Students</th>
                   <th>Mail</th>
                   <th>Status</th>
-                  <th>Action</th>
+                  <th className="text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-200">
@@ -284,16 +358,48 @@ export function AssessmentProctorsPage({ assessmentId: assessmentIdProp, embedde
                       <td className="text-slate-700">{proctor.assignedStudentCount || 0}</td>
                       <td><span className={statusClass(proctor.mailStatus)}>{proctor.mailStatus.replace('_', ' ')}</span></td>
                       <td><span className={statusClass(proctor.activeStatus)}>{proctor.activeStatus}</span></td>
-                      <td>
+                      <td className="relative text-right">
                         <button
-                          className="secondary-button h-8 px-2 text-xs"
+                          className="secondary-button h-8 w-8 px-0"
                           type="button"
-                          onClick={() => sendMail(proctor)}
-                          disabled={sendingMailId === proctor._id}
+                          onClick={(event) => toggleActionMenu(event, proctor._id)}
+                          aria-label={`Actions for ${proctor.name}`}
                         >
-                          <Mail size={13} />
-                          {sendingMailId === proctor._id ? 'Sending' : ['sent', 'resent'].includes(proctor.mailStatus) ? 'Resend' : 'Send Mail'}
+                          <MoreHorizontal size={15} className="text-brand-500" />
                         </button>
+                        {openActionMenu === proctor._id ? (
+                          <div
+                            className="fixed z-50 w-44 rounded-md border border-slate-200 bg-white py-1 text-left shadow-xl"
+                            style={{ top: actionMenuPosition.top, left: actionMenuPosition.left }}
+                          >
+                            <button
+                              className="flex w-full items-center gap-2 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                              type="button"
+                              onClick={() => sendMail(proctor)}
+                              disabled={sendingMailId === proctor._id || ['sent', 'resent'].includes(proctor.mailStatus)}
+                            >
+                              <Mail size={14} className="text-brand-500" />
+                              {sendingMailId === proctor._id ? 'Sending...' : ['sent', 'resent'].includes(proctor.mailStatus) ? 'Mail sent' : 'Send mail'}
+                            </button>
+                            <button
+                              className="flex w-full items-center gap-2 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                              type="button"
+                              onClick={() => copyText(proctor.generatedProctorId, 'proctor ID')}
+                            >
+                              <Copy size={14} className="text-brand-500" />
+                              Copy proctor ID
+                            </button>
+                            <button
+                              className="flex w-full items-center gap-2 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                              type="button"
+                              onClick={() => copyText(proctor.passwordPreview, 'password')}
+                              disabled={!proctor.passwordPreview}
+                            >
+                              <KeyRound size={14} className="text-brand-500" />
+                              Copy password
+                            </button>
+                          </div>
+                        ) : null}
                       </td>
                     </tr>
                   ))
@@ -301,7 +407,8 @@ export function AssessmentProctorsPage({ assessmentId: assessmentIdProp, embedde
               </tbody>
             </table>
           </div>
-        </SectionPanel>
+          </SectionPanel>
+        ) : null}
       </div>
     </section>
   );

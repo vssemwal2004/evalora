@@ -3,6 +3,7 @@ import { useState } from 'react';
 import {
   BarChart3,
   BookOpen,
+  Activity,
   ChevronDown,
   GraduationCap,
   ClipboardList,
@@ -13,6 +14,7 @@ import {
   NotebookTabs,
   Plus,
   Shield,
+  Settings as SettingsIcon,
   UserPlus,
   UserRoundCog,
   Users,
@@ -42,6 +44,7 @@ const navByRole = {
           { label: 'Create Assessment', to: '/super-admin/assessments/create', icon: FilePlus2 },
           { label: 'Assessment Reports', to: '/super-admin/assessments/reports', icon: BarChart3 },
           { label: 'My Assessments', to: '/super-admin/assessments/my', icon: ClipboardList },
+          { label: 'Review Assessments', to: '/super-admin/assessments/review', icon: ListChecks },
         ],
       },
       {
@@ -51,6 +54,14 @@ const navByRole = {
         children: [
           { label: 'Add Courses', to: '/super-admin/courses/add', icon: Plus },
           { label: 'View Courses', to: '/super-admin/courses/view', icon: ListChecks },
+        ],
+      },
+      {
+        id: 'students',
+        label: 'Students',
+        icon: Users,
+        children: [
+          { label: 'View Students', to: '/super-admin/students/view', icon: ListChecks },
         ],
       },
       {
@@ -72,12 +83,28 @@ const navByRole = {
         ],
       },
       {
+        id: 'activity',
+        label: 'Log Activity',
+        icon: Activity,
+        children: [
+          { label: 'Activity Logs', to: '/super-admin/activity', icon: Activity },
+        ],
+      },
+      {
         id: 'library',
         label: 'Library',
         icon: BookOpen,
         children: [
           { label: 'Add Questions', to: '/super-admin/library/add', icon: Plus },
           { label: 'View Library', to: '/super-admin/library/view', icon: BookOpen },
+        ],
+      },
+      {
+        id: 'settings',
+        label: 'Settings',
+        icon: SettingsIcon,
+        children: [
+          { label: 'Account Settings', to: '/super-admin/settings', icon: SettingsIcon },
         ],
       },
     ],
@@ -94,6 +121,7 @@ const navByRole = {
           { label: 'Create Assessment', to: '/admin/assessments/create', icon: FilePlus2, permission: 'assessment.create' },
           { label: 'Assessment Reports', to: '/admin/assessments/reports', icon: BarChart3, permission: 'reports.view' },
           { label: 'My Assessments', to: '/admin/assessments/my', icon: ClipboardList, permission: 'assessment.view' },
+          { label: 'Review Assessments', to: '/admin/assessments/review', icon: ListChecks, permission: 'assessment.view' },
         ],
       },
       {
@@ -103,6 +131,14 @@ const navByRole = {
         children: [
           { label: 'Add Courses', to: '/admin/courses/add', icon: Plus, permission: 'course.create' },
           { label: 'View Courses', to: '/admin/courses/view', icon: ListChecks, permission: 'course.view' },
+        ],
+      },
+      {
+        id: 'students',
+        label: 'Students',
+        icon: Users,
+        children: [
+          { label: 'View Students', to: '/admin/students/view', icon: ListChecks, permission: 'student.view' },
         ],
       },
       {
@@ -124,12 +160,33 @@ const navByRole = {
         ],
       },
       {
+        id: 'activity',
+        label: 'Log Activity',
+        icon: Activity,
+        children: [
+          {
+            label: 'Activity Logs',
+            to: '/admin/activity',
+            icon: Activity,
+            anyPermissions: ['activity.faculty.view', 'activity.moderator.view', 'audit.view'],
+          },
+        ],
+      },
+      {
         id: 'library',
         label: 'Library',
         icon: BookOpen,
         children: [
           { label: 'Add Questions', to: '/admin/library/add', icon: Plus, permission: 'library.create' },
           { label: 'View Library', to: '/admin/library/view', icon: BookOpen, permission: 'library.view' },
+        ],
+      },
+      {
+        id: 'settings',
+        label: 'Settings',
+        icon: SettingsIcon,
+        children: [
+          { label: 'Account Settings', to: '/admin/settings', icon: SettingsIcon },
         ],
       },
     ],
@@ -154,6 +211,14 @@ const navByRole = {
           { label: 'View Library', to: '/faculty/library/view', icon: BookOpen, permission: 'library.view' },
         ],
       },
+      {
+        id: 'settings',
+        label: 'Settings',
+        icon: SettingsIcon,
+        children: [
+          { label: 'Account Settings', to: '/faculty/settings', icon: SettingsIcon },
+        ],
+      },
     ],
   },
   moderator: {
@@ -165,6 +230,14 @@ const navByRole = {
         icon: Shield,
         children: [
           { label: 'Review Queue', to: '/moderator', icon: NotebookTabs },
+        ],
+      },
+      {
+        id: 'settings',
+        label: 'Settings',
+        icon: SettingsIcon,
+        children: [
+          { label: 'Account Settings', to: '/moderator/settings', icon: SettingsIcon },
         ],
       },
     ],
@@ -202,7 +275,10 @@ function filterNavConfig(navConfig, role, user) {
   }
 
   const permissions = new Set(user?.permissions || []);
-  const canAccess = (item) => !item.permission || permissions.has(item.permission);
+  const canAccess = (item) => {
+    if (item.anyPermissions) return item.anyPermissions.some((permission) => permissions.has(permission));
+    return !item.permission || permissions.has(item.permission);
+  };
 
   return {
     ...navConfig,
@@ -230,33 +306,37 @@ function SidebarSection({ section, isOpen, onToggle, sidebarOpen }) {
   const expanded = sidebarOpen && (isOpen || isSectionActive);
 
   return (
-    <div className="group/sidebar-section space-y-0.5">
+    <div className="space-y-1">
       <button
-        className={`flex h-9 w-full items-center rounded-md border text-[13px] font-semibold transition duration-200 ease-out ${
-          sidebarOpen ? 'justify-between px-2.5' : 'justify-center px-0'
+        className={`group relative flex h-10 w-full items-center overflow-hidden rounded-xl border text-[12px] font-semibold transition-all duration-200 ease-out ${
+          sidebarOpen ? 'justify-between px-2' : 'justify-center px-0'
         } ${
-          expanded
-            ? 'border-brand-100 bg-brand-50 text-brand-700'
+          expanded || isSectionActive
+            ? 'border-brand-100 bg-brand-50/90 text-brand-700 shadow-[0_8px_22px_rgba(249,115,22,0.12)]'
             : 'border-transparent text-slate-600 hover:border-slate-200 hover:bg-slate-50 hover:text-slate-950'
         }`}
         type="button"
         onClick={onToggle}
         title={section.label}
+        aria-expanded={expanded}
       >
-        <span className={`flex min-w-0 items-center ${sidebarOpen ? 'gap-2.5' : 'justify-center'}`}>
-          <section.icon size={16} className="shrink-0 text-brand-500" />
-          <span className={`overflow-hidden truncate whitespace-nowrap transition-all duration-200 ${sidebarOpen ? 'max-w-[145px] opacity-100' : 'max-w-0 opacity-0'}`}>
+        {(expanded || isSectionActive) ? <span className="absolute left-0 top-2 h-6 w-1 rounded-r-full bg-brand-500" /> : null}
+        <span className={`flex min-w-0 items-center ${sidebarOpen ? 'gap-2' : 'justify-center'}`}>
+          <span className={`grid h-7 w-7 shrink-0 place-items-center rounded-lg transition-all duration-200 ${
+            expanded || isSectionActive ? 'bg-white text-brand-600 shadow-sm' : 'bg-slate-100 text-slate-500 group-hover:bg-white group-hover:text-brand-600'
+          }`}>
+            <section.icon size={15} />
+          </span>
+          <span className={`overflow-hidden truncate whitespace-nowrap transition-all duration-200 ${sidebarOpen ? 'max-w-[142px] opacity-100' : 'max-w-0 opacity-0'}`}>
             {section.label}
           </span>
         </span>
-        {sidebarOpen ? <ChevronDown size={14} className={`shrink-0 text-slate-400 transition-transform duration-200 ${expanded ? 'rotate-180' : ''}`} /> : null}
+        {sidebarOpen ? <ChevronDown size={13} className={`shrink-0 text-slate-400 transition-transform duration-200 ${expanded ? 'rotate-180 text-brand-500' : ''}`} /> : null}
       </button>
 
       <div
-        className={`ml-3 overflow-hidden border-l border-slate-200 pl-2.5 transition-all duration-200 ease-out ${
-          sidebarOpen ? 'group-hover/sidebar-section:max-h-64 group-hover/sidebar-section:translate-x-0 group-hover/sidebar-section:opacity-100' : ''
-        } ${
-          expanded ? 'max-h-64 translate-x-0 opacity-100' : 'max-h-0 -translate-x-1 opacity-0'
+        className={`ml-3 overflow-hidden border-l border-slate-200 pl-2.5 transition-all duration-300 ease-out ${
+          expanded ? 'max-h-72 translate-x-0 opacity-100' : 'max-h-0 -translate-x-1 opacity-0'
         }`}
       >
         <div className="space-y-0.5 py-1">
@@ -266,14 +346,14 @@ function SidebarSection({ section, isOpen, onToggle, sidebarOpen }) {
               to={item.to}
               end
               className={({ isActive }) =>
-                `flex h-8 items-center gap-2 rounded-md px-2.5 text-[13px] font-medium transition duration-200 ease-out ${
+                `flex h-8 items-center gap-2 rounded-lg px-2 text-[12px] font-semibold transition-all duration-200 ease-out ${
                   isActive
-                    ? 'border border-brand-100 bg-white text-brand-700'
-                    : 'border border-transparent text-slate-500 hover:bg-white hover:text-slate-900'
+                    ? 'border border-brand-100 bg-white text-brand-700 shadow-sm'
+                    : 'border border-transparent text-slate-500 hover:translate-x-0.5 hover:bg-white hover:text-slate-900'
                 }`
               }
             >
-              <item.icon size={14} className="shrink-0 text-brand-500" />
+              <item.icon size={13} className="shrink-0 text-brand-500" />
               <span className="truncate">{item.label}</span>
             </NavLink>
           ))}
@@ -341,10 +421,10 @@ export function AppShell({ role }) {
   }
 
   return (
-    <div className="min-h-screen bg-[#f6f7f9]">
+    <div className={`ops-shell ops-shell-${role} min-h-screen bg-[#f6f7f9]`}>
       <aside
-        className={`fixed inset-y-0 left-0 z-30 hidden overflow-hidden border-r border-slate-200 bg-white shadow-[8px_0_30px_rgba(15,23,42,0.08)] transition-all duration-300 ease-out lg:block ${
-          isSidebarHovered ? 'w-[238px]' : 'w-[68px]'
+        className={`fixed inset-y-0 left-0 z-30 hidden overflow-hidden border-r border-slate-200 bg-white/95 shadow-[10px_0_34px_rgba(15,23,42,0.08)] backdrop-blur-xl transition-all duration-300 ease-out lg:block ${
+          isSidebarHovered ? 'w-[226px]' : 'w-[68px]'
         }`}
         onMouseEnter={() => setIsSidebarHovered(true)}
         onMouseLeave={() => setIsSidebarHovered(false)}
@@ -353,33 +433,44 @@ export function AppShell({ role }) {
           <img
             src="/logo.webp"
             alt="Evalora"
-            className={`object-contain transition-all duration-300 ${isSidebarHovered ? 'h-11 w-36 object-left' : 'h-9 w-10 object-center'}`}
+            className={`object-contain transition-all duration-300 ${isSidebarHovered ? 'h-10 w-32 object-left' : 'h-9 w-10 object-center'}`}
           />
         </div>
 
-        <div className={`overflow-hidden border-b border-slate-100 transition-all duration-300 ${isSidebarHovered ? 'max-h-14 px-4 py-2.5 opacity-100' : 'max-h-0 px-4 py-0 opacity-0'}`}>
-          <p className="text-[10px] font-semibold uppercase text-slate-400">Workspace</p>
-          <p className="mt-0.5 truncate text-xs font-semibold text-slate-800">{roleTitles[role]}</p>
+        <div className={`overflow-hidden border-b border-slate-100 transition-all duration-300 ${isSidebarHovered ? 'max-h-16 px-3 py-2.5 opacity-100' : 'max-h-0 px-3 py-0 opacity-0'}`}>
+          <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+            <p className="text-[9px] font-bold uppercase text-slate-400">Workspace</p>
+            <p className="mt-0.5 truncate text-[12px] font-bold text-slate-800">{roleTitles[role]}</p>
+          </div>
         </div>
 
-        <nav className={`max-h-[calc(100vh-72px)] space-y-1 overflow-y-auto py-3 transition-all duration-300 ${isSidebarHovered ? 'px-3' : 'px-2'}`}>
+        <nav className={`max-h-[calc(100vh-150px)] space-y-1 overflow-y-auto py-3 transition-all duration-300 ${isSidebarHovered ? 'px-2.5' : 'px-2'}`}>
           <NavLink
             to={navConfig.dashboard}
             end
             className={({ isActive }) =>
-              `flex h-9 items-center rounded-md border text-[13px] font-semibold transition duration-200 ease-out ${
-                isSidebarHovered ? 'justify-start gap-2.5 px-2.5' : 'justify-center px-0'
+              `group relative flex h-10 items-center overflow-hidden rounded-xl border text-[12px] font-semibold transition-all duration-200 ease-out ${
+                isSidebarHovered ? 'justify-start gap-2 px-2' : 'justify-center px-0'
               } ${
                 isActive
-                  ? 'border-brand-100 bg-brand-50 text-brand-700'
+                  ? 'border-brand-100 bg-brand-50/90 text-brand-700 shadow-[0_8px_22px_rgba(249,115,22,0.12)]'
                   : 'border-transparent text-slate-600 hover:border-slate-200 hover:bg-slate-50 hover:text-slate-950'
               }`
             }
           >
-            <LayoutDashboard size={16} className="shrink-0 text-brand-500" />
-            <span className={`overflow-hidden truncate whitespace-nowrap transition-all duration-200 ${isSidebarHovered ? 'max-w-[145px] opacity-100' : 'max-w-0 opacity-0'}`}>
-              Dashboard
-            </span>
+            {({ isActive }) => (
+              <>
+                {isActive ? <span className="absolute left-0 top-2 h-6 w-1 rounded-r-full bg-brand-500" /> : null}
+                <span className={`grid h-7 w-7 shrink-0 place-items-center rounded-lg transition-all duration-200 ${
+                  isActive ? 'bg-white text-brand-600 shadow-sm' : 'bg-slate-100 text-slate-500 group-hover:bg-white group-hover:text-brand-600'
+                }`}>
+                  <LayoutDashboard size={15} />
+                </span>
+                <span className={`overflow-hidden truncate whitespace-nowrap transition-all duration-200 ${isSidebarHovered ? 'max-w-[142px] opacity-100' : 'max-w-0 opacity-0'}`}>
+                  Dashboard
+                </span>
+              </>
+            )}
           </NavLink>
 
           {(navConfig.sections || []).map((section) => (
@@ -392,10 +483,22 @@ export function AppShell({ role }) {
             />
           ))}
         </nav>
+
+        <div className={`absolute inset-x-0 bottom-0 border-t border-slate-200 bg-white/95 p-2 transition-all duration-300 ${isSidebarHovered ? 'opacity-100' : 'opacity-100'}`}>
+          <div className={`flex items-center rounded-xl border border-slate-200 bg-slate-50 transition-all duration-300 ${isSidebarHovered ? 'gap-2 px-2.5 py-2' : 'justify-center px-1 py-2'}`}>
+            <div className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-brand-500 text-xs font-bold text-white shadow-sm">
+              {(user?.name || roleTitles[role] || 'E').charAt(0).toUpperCase()}
+            </div>
+            <div className={`min-w-0 overflow-hidden transition-all duration-200 ${isSidebarHovered ? 'max-w-[132px] opacity-100' : 'max-w-0 opacity-0'}`}>
+              <p className="truncate text-[12px] font-bold text-slate-900">{user?.name || roleTitles[role]}</p>
+              <p className="truncate text-[10px] font-semibold text-slate-500">{roleTitles[role]}</p>
+            </div>
+          </div>
+        </div>
       </aside>
 
       <div className="transition-[padding] duration-300 lg:pl-[68px]">
-        <header className="sticky top-0 z-10 flex h-16 items-center justify-between border-b border-slate-200 bg-white/95 px-6 backdrop-blur">
+        <header className="sticky top-0 z-10 flex h-14 items-center justify-between border-b border-slate-200 bg-white/95 px-5 backdrop-blur">
           <div>
             <p className="field-label text-brand-600">Evalora</p>
             <h1 className="text-base font-semibold text-slate-950">{user?.name || 'Operations Console'}</h1>
@@ -407,7 +510,7 @@ export function AppShell({ role }) {
           </button>
         </header>
 
-        <main className="p-5 xl:p-6">
+        <main className="p-4 xl:p-5">
           <Outlet />
         </main>
       </div>

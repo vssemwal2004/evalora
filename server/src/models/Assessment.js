@@ -101,13 +101,27 @@ const assessmentSchema = new mongoose.Schema(
       ref: 'User',
       required: true,
     },
+    createdByName: {
+      type: String,
+      trim: true,
+    },
+    createdByEmail: {
+      type: String,
+      trim: true,
+      lowercase: true,
+    },
+    createdByRole: {
+      type: String,
+      trim: true,
+      index: true,
+    },
     updatedBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
     },
     status: {
       type: String,
-      enum: ['draft', 'upcoming', 'active', 'pending', 'completed'],
+      enum: ['draft', 'review', 'upcoming', 'active', 'pending', 'completed'],
       default: 'draft',
       index: true,
     },
@@ -164,7 +178,7 @@ const assessmentSchema = new mongoose.Schema(
     settings: {
       type: mongoose.Schema.Types.Mixed,
       default: () => ({
-        passwordRequired: true,
+        passwordRequired: false,
         proctoringEnabled: false,
         chatEnabled: false,
         warningMessagesEnabled: true,

@@ -2,6 +2,7 @@ const express = require('express');
 const User = require('../models/User');
 const Assessment = require('../models/Assessment');
 const AssessmentStudent = require('../models/AssessmentStudent');
+const AssessmentProctor = require('../models/AssessmentProctor');
 const StudentProfile = require('../models/StudentProfile');
 const { ROLES } = require('../constants/roles');
 const { authenticate, requirePermission, requireRole } = require('../middleware/auth');
@@ -523,6 +524,90 @@ router.post('/', requirePermission('student.add'), async (req, res, next) => {
       return res.status(409).json({ message: 'Student is already added to this assessment.' });
     }
 
+    return next(error);
+  }
+});
+
+router.delete('/bulk', requirePermission('student.remove'), async (req, res, next) => {
+  try {
+    const assessment = await findScopedAssessment(req);
+    if (!assessment) {
+      return res.status(404).json({ message: 'Assessment not found.' });
+    }
+
+    const ids = Array.isArray(req.body.ids) ? req.body.ids.filter(Boolean) : [];
+    if (ids.length === 0) {
+      return res.status(400).json({ message: 'No students selected.' });
+    }
+
+    const students = await AssessmentStudent.find({ _id: { $in: ids }, assessmentId: assessment._id });
+    if (students.length === 0) {
+      return res.status(404).json({ message: 'No matching students found in this assessment.' });
+    }
+
+    const studentIds = students.map((student) => student._id);
+    await AssessmentStudent.deleteMany({ _id: { $in: studentIds }, assessmentId: assessment._id });
+    await AssessmentProctor.updateMany(
+      { assessmentId: assessment._id },
+      { $pull: { assignedStudents: { assessmentStudentId: { $in: studentIds } } } }
+    );
+
+    const proctors = await AssessmentProctor.find({ assessmentId: assessment._id });
+    await Promise.all(proctors.map((proctor) => proctor.save()));
+    await syncAssessmentStudentCounts(assessment._id);
+
+    await writeAuditLog(req, {
+      action: 'assessment.student.bulk_delete',
+      targetType: 'Assessment',
+      targetId: assessment._id,
+      newValue: {
+        count: students.length,
+        emails: students.map((student) => student.email),
+      },
+    });
+
+    return res.json({ message: 'Selected students deleted from assessment.', count: students.length });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.delete('/:studentId', requirePermission('student.remove'), async (req, res, next) => {
+  try {
+    const assessment = await findScopedAssessment(req);
+    if (!assessment) {
+      return res.status(404).json({ message: 'Assessment not found.' });
+    }
+
+    const student = await AssessmentStudent.findOneAndDelete({
+      _id: req.params.studentId,
+      assessmentId: assessment._id,
+    });
+
+    if (!student) {
+      return res.status(404).json({ message: 'Student not found in this assessment.' });
+    }
+
+    await AssessmentProctor.updateMany(
+      { assessmentId: assessment._id },
+      { $pull: { assignedStudents: { assessmentStudentId: student._id } } }
+    );
+    const proctors = await AssessmentProctor.find({ assessmentId: assessment._id });
+    await Promise.all(proctors.map((proctor) => proctor.save()));
+    await syncAssessmentStudentCounts(assessment._id);
+
+    await writeAuditLog(req, {
+      action: 'assessment.student.delete',
+      targetType: 'AssessmentStudent',
+      targetId: student._id,
+      newValue: {
+        assessmentId: assessment._id,
+        email: student.email,
+      },
+    });
+
+    return res.json({ message: 'Student deleted from assessment.' });
+  } catch (error) {
     return next(error);
   }
 });

@@ -18,7 +18,7 @@ router.get('/summary', async (req, res, next) => {
       User.countDocuments({ role: ROLES.PROCTOR }),
       Assessment.countDocuments(assessmentScope),
       Assessment.countDocuments({ ...assessmentScope, status: 'active' }),
-      AuditLog.find({})
+      AuditLog.find({ action: { $not: { $regex: '^request\\.' } } })
         .sort({ createdAt: -1 })
         .limit(8)
         .select('action targetType reason actorRole createdAt'),

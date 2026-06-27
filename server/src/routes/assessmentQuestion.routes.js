@@ -2,6 +2,7 @@ const express = require('express');
 const Assessment = require('../models/Assessment');
 const AssessmentQuestion = require('../models/AssessmentQuestion');
 const Question = require('../models/Question');
+const User = require('../models/User');
 const { ROLES } = require('../constants/roles');
 const { authenticate, requirePermission, requireRole } = require('../middleware/auth');
 const { writeAuditLog } = require('../services/audit.service');
@@ -13,6 +14,12 @@ router.use(authenticate, requireRole(ROLES.SUPER_ADMIN, ROLES.ADMIN));
 
 function getAssessmentScope(req) {
   return req.user.role === ROLES.SUPER_ADMIN ? {} : { ownerAdminId: req.user._id };
+}
+
+function getCreatorRoleMatch(source) {
+  if (source === 'faculty') return [ROLES.FACULTY];
+  if (source === 'admin') return [ROLES.SUPER_ADMIN, ROLES.ADMIN];
+  return [];
 }
 
 async function findScopedAssessment(req) {
@@ -214,7 +221,7 @@ router.post('/from-library', requirePermission('assessment.edit'), async (req, r
         ...payload,
         assessmentId: assessment._id,
         libraryQuestionId: libraryQuestion._id,
-        sourcePaperHeading: paperHeading,
+        sourcePaperHeading: libraryQuestion.paperHeading,
         ownerAdminId: assessment.ownerAdminId,
         createdBy: req.user._id,
         order,
@@ -293,8 +300,15 @@ router.post('/from-library-heading', requirePermission('assessment.edit'), async
     await ensureAssessmentCourse(assessment, mappedCourse);
 
     const libraryScope = req.user.role === ROLES.SUPER_ADMIN ? {} : { ownerAdminId: req.user._id };
+    const source = String(req.body.source || 'both').trim();
+    const creatorRoles = getCreatorRoleMatch(source);
+    const sourceQuery = {};
+    if (creatorRoles.length > 0) {
+      sourceQuery.createdBy = { $in: await User.find({ role: { $in: creatorRoles } }).distinct('_id') };
+    }
     const libraryQuestions = await Question.find({
       ...libraryScope,
+      ...sourceQuery,
       status: 'active',
       paperHeading: exactRegex(paperHeading),
     }).sort({ createdAt: 1 });

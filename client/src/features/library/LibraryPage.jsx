@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
-import readXlsxFile from 'read-excel-file/browser';
-import writeXlsxFile from 'write-excel-file/browser';
+import { readSheet } from 'read-excel-file/browser';
 import {
   ArrowLeft,
   BookOpen,
@@ -19,6 +18,7 @@ import {
   UploadCloud,
 } from 'lucide-react';
 import { api } from '../../lib/api';
+import { downloadXlsx } from '../../lib/xlsxDownload';
 import { EmptyState, PageHeader, SectionPanel } from '../../ui/Surface.jsx';
 
 const defaultQuestion = {
@@ -112,6 +112,7 @@ export function AddLibraryQuestionsPage() {
   const location = useLocation();
   const [searchParams] = useSearchParams();
   const assessmentId = searchParams.get('assessmentId') || '';
+  const source = searchParams.get('source') || 'both';
   const workId = searchParams.get('workId') || '';
   const roleBase = getRoleBase(location.pathname);
   const [paperHeading, setPaperHeading] = useState('');
@@ -159,7 +160,7 @@ export function AddLibraryQuestionsPage() {
   }
 
   async function downloadTemplate() {
-    await writeXlsxFile(
+    await downloadXlsx(
       [
         [
           { value: 'Question Type', fontWeight: 'bold' },
@@ -198,7 +199,7 @@ export function AddLibraryQuestionsPage() {
           { value: 'easy' },
         ],
       ],
-      { fileName: `evalora-question-template-${paperHeading || 'paper'}.xlsx` }
+      `evalora-question-template-${paperHeading || 'paper'}.xlsx`
     );
   }
 
@@ -225,7 +226,7 @@ export function AddLibraryQuestionsPage() {
     if (!file) return;
 
     try {
-      const rows = await readXlsxFile(file);
+      const rows = await readSheet(file);
       await validateRows(normalizeImportRows(sheetRowsToObjects(rows)));
     } catch {
       setError('Unable to read Excel file. Please use the provided template.');
@@ -251,7 +252,7 @@ export function AddLibraryQuestionsPage() {
   function continueToAssessmentMapping() {
     if (!assessmentId || !paperHeading.trim()) return;
     navigate(
-      `${roleBase}/assessments/create?draftId=${assessmentId}&step=questions&folders=${encodeURIComponent(paperHeading.trim())}`,
+      `${roleBase}/assessments/create?draftId=${assessmentId}&step=questions&source=${source}&folders=${encodeURIComponent(paperHeading.trim())}`,
       { replace: true }
     );
   }
@@ -443,6 +444,7 @@ export function ViewLibraryPage() {
   const location = useLocation();
   const [searchParams] = useSearchParams();
   const assessmentId = searchParams.get('assessmentId') || '';
+  const source = searchParams.get('source') || 'both';
   const roleBase = getRoleBase(location.pathname);
   const isAssessmentSelectMode = Boolean(assessmentId);
   const [selectedHeadings, setSelectedHeadings] = useState([]);
@@ -452,6 +454,7 @@ export function ViewLibraryPage() {
   const [isLoadingGroups, setIsLoadingGroups] = useState(true);
   const [error, setError] = useState('');
   const [openFolderMenu, setOpenFolderMenu] = useState('');
+  const [folderMenuPosition, setFolderMenuPosition] = useState({ top: 0, left: 0 });
   const [folderAction, setFolderAction] = useState(null);
   const [folderDraft, setFolderDraft] = useState('');
   const [isActing, setIsActing] = useState(false);
@@ -469,18 +472,31 @@ export function ViewLibraryPage() {
     setError('');
   }
 
+  function toggleFolderMenu(event, folderKey) {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const menuWidth = 144;
+    const menuHeight = 96;
+    const gap = 8;
+    const hasRoomBelow = window.innerHeight - rect.bottom >= menuHeight + gap;
+    const top = hasRoomBelow ? rect.bottom + gap : Math.max(gap, rect.top - menuHeight - gap);
+    const left = Math.min(Math.max(gap, rect.right - menuWidth), window.innerWidth - menuWidth - gap);
+
+    setFolderMenuPosition({ top, left });
+    setOpenFolderMenu((current) => (current === folderKey ? '' : folderKey));
+  }
+
   const loadGroups = useCallback(async () => {
     setIsLoadingGroups(true);
     setError('');
     try {
-      const response = await api.get('/library/groups', { params: { search: appliedGroupSearch || undefined } });
+      const response = await api.get('/library/groups', { params: { search: appliedGroupSearch || undefined, source } });
       setGroups(response.data.items);
     } catch (requestError) {
       setError(requestError.response?.data?.message || 'Unable to load library folders.');
     } finally {
       setIsLoadingGroups(false);
     }
-  }, [appliedGroupSearch]);
+  }, [appliedGroupSearch, source]);
 
   useEffect(() => {
     loadGroups();
@@ -548,7 +564,7 @@ export function ViewLibraryPage() {
   function continueWithSelectedFolders() {
     if (!assessmentId || selectedHeadings.length === 0) return;
     navigate(
-      `${roleBase}/assessments/create?draftId=${assessmentId}&step=questions&folders=${encodeURIComponent(selectedHeadings.join('||'))}`,
+      `${roleBase}/assessments/create?draftId=${assessmentId}&step=questions&source=${source}&folders=${encodeURIComponent(selectedHeadings.join('||'))}`,
       { replace: true }
     );
   }
@@ -569,7 +585,7 @@ export function ViewLibraryPage() {
               <button
                 className="secondary-button"
                 type="button"
-                onClick={() => navigate(`${roleBase}/library/add?assessmentId=${assessmentId}`)}
+                onClick={() => navigate(`${roleBase}/library/add?assessmentId=${assessmentId}&source=${source}`)}
               >
                 <Plus size={16} className="text-brand-500" />
                 Create New Heading
@@ -653,12 +669,15 @@ export function ViewLibraryPage() {
                             className="secondary-button h-8 w-8 px-0"
                             type="button"
                             aria-label={`Actions for ${group.paperHeading}`}
-                            onClick={() => setOpenFolderMenu((current) => (current === group.paperHeading ? '' : group.paperHeading))}
+                            onClick={(event) => toggleFolderMenu(event, group.paperHeading)}
                           >
                             <MoreHorizontal size={15} className="text-brand-500" />
                           </button>
                           {openFolderMenu === group.paperHeading ? (
-                            <div className="absolute right-4 top-10 z-20 w-36 rounded-md border border-slate-200 bg-white py-1 shadow-xl">
+                            <div
+                              className="fixed z-50 w-36 rounded-md border border-slate-200 bg-white py-1 shadow-xl"
+                              style={{ top: folderMenuPosition.top, left: folderMenuPosition.left }}
+                            >
                               <button className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm font-semibold text-slate-700 hover:bg-brand-50" type="button" onClick={() => beginFolderEdit(group)}>
                                 <Pencil size={14} className="text-brand-500" />
                                 Edit
@@ -729,6 +748,7 @@ export function LibraryFolderQuestionsPage() {
   const [isLoadingQuestions, setIsLoadingQuestions] = useState(false);
   const [error, setError] = useState('');
   const [openQuestionMenu, setOpenQuestionMenu] = useState('');
+  const [questionMenuPosition, setQuestionMenuPosition] = useState({ top: 0, left: 0 });
   const [questionAction, setQuestionAction] = useState(null);
   const [questionDraft, setQuestionDraft] = useState(makeEditableQuestion());
   const [isActing, setIsActing] = useState(false);
@@ -748,6 +768,19 @@ export function LibraryFolderQuestionsPage() {
     setQuestionAction({ type: 'delete', question });
     setOpenQuestionMenu('');
     setError('');
+  }
+
+  function toggleQuestionMenu(event, questionId) {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const menuWidth = 144;
+    const menuHeight = 96;
+    const gap = 8;
+    const hasRoomBelow = window.innerHeight - rect.bottom >= menuHeight + gap;
+    const top = hasRoomBelow ? rect.bottom + gap : Math.max(gap, rect.top - menuHeight - gap);
+    const left = Math.min(Math.max(gap, rect.right - menuWidth), window.innerWidth - menuWidth - gap);
+
+    setQuestionMenuPosition({ top, left });
+    setOpenQuestionMenu((current) => (current === questionId ? '' : questionId));
   }
 
   function updateQuestionDraft(field, value) {
@@ -945,12 +978,15 @@ export function LibraryFolderQuestionsPage() {
                           className="secondary-button h-8 w-8 px-0"
                           type="button"
                           aria-label={`Actions for question ${question._id}`}
-                          onClick={() => setOpenQuestionMenu((current) => (current === question._id ? '' : question._id))}
+                          onClick={(event) => toggleQuestionMenu(event, question._id)}
                         >
                           <MoreHorizontal size={15} className="text-brand-500" />
                         </button>
                         {openQuestionMenu === question._id ? (
-                          <div className="absolute right-4 top-10 z-20 w-36 rounded-md border border-slate-200 bg-white py-1 shadow-xl">
+                          <div
+                            className="fixed z-50 w-36 rounded-md border border-slate-200 bg-white py-1 shadow-xl"
+                            style={{ top: questionMenuPosition.top, left: questionMenuPosition.left }}
+                          >
                             <button className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm font-semibold text-slate-700 hover:bg-brand-50" type="button" onClick={() => beginQuestionEdit(question)}>
                               <Pencil size={14} className="text-brand-500" />
                               Edit

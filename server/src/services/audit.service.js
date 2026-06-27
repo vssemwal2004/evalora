@@ -5,6 +5,8 @@ async function writeAuditLog(req, payload) {
     await AuditLog.create({
       actorId: req.user?._id,
       actorRole: req.user?.role,
+      actorName: req.user?.name,
+      actorEmail: req.user?.email,
       ip: req.ip,
       userAgent: req.get('user-agent'),
       ...payload,

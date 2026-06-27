@@ -22,13 +22,16 @@ const ADMIN_PERMISSIONS = Object.freeze([
   'course.edit',
   'course.archive',
   'faculty.view',
+  'faculty.view.all',
   'faculty.create',
   'faculty.edit',
   'faculty.remove',
   'moderator.view',
+  'moderator.view.all',
   'moderator.create',
   'moderator.edit',
   'moderator.remove',
+  'student.view',
   'student.add',
   'student.edit',
   'student.remove',
@@ -48,6 +51,8 @@ const ADMIN_PERMISSIONS = Object.freeze([
   'ufm.reverse',
   'settings.manage',
   'audit.view',
+  'activity.faculty.view',
+  'activity.moderator.view',
 ]);
 
 const STAFF_PERMISSIONS = Object.freeze([

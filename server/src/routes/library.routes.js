@@ -1,5 +1,6 @@
 const express = require('express');
 const Question = require('../models/Question');
+const User = require('../models/User');
 const { ROLES } = require('../constants/roles');
 const { authenticate, requirePermission, requireRole } = require('../middleware/auth');
 const { writeAuditLog } = require('../services/audit.service');
@@ -20,6 +21,29 @@ function getScopedQuery(req) {
 
 function getLibraryOwner(req) {
   return req.user.role === ROLES.FACULTY ? req.user.ownerAdminId : req.user._id;
+}
+
+function getCreatorRoleMatch(source) {
+  if (source === 'faculty') return [ROLES.FACULTY];
+  if (source === 'admin') return [ROLES.SUPER_ADMIN, ROLES.ADMIN];
+  return [];
+}
+
+function appendSourceLookup(pipeline, source) {
+  const roles = getCreatorRoleMatch(source);
+  if (roles.length === 0) return;
+  pipeline.push(
+    {
+      $lookup: {
+        from: 'users',
+        localField: 'createdBy',
+        foreignField: '_id',
+        as: 'creator',
+      },
+    },
+    { $unwind: '$creator' },
+    { $match: { 'creator.role': { $in: roles } } }
+  );
 }
 
 function normalizeHeading(value) {
@@ -144,14 +168,16 @@ async function buildPreview(req, rows, defaultHeading) {
 router.get('/groups', requirePermission('library.view'), async (req, res, next) => {
   try {
     const search = String(req.query.search || '').trim();
+    const source = String(req.query.source || 'both').trim();
     const match = { ...getScopedQuery(req), status: 'active' };
 
     if (search) {
       match.paperHeading = { $regex: search, $options: 'i' };
     }
 
-    const items = await Question.aggregate([
-      { $match: match },
+    const pipeline = [{ $match: match }];
+    appendSourceLookup(pipeline, source);
+    pipeline.push(
       {
         $group: {
           _id: '$paperHeading',
@@ -163,8 +189,10 @@ router.get('/groups', requirePermission('library.view'), async (req, res, next) 
           lastUpdatedAt: { $max: '$updatedAt' },
         },
       },
-      { $sort: { lastUpdatedAt: -1 } },
-    ]);
+      { $sort: { lastUpdatedAt: -1 } }
+    );
+
+    const items = await Question.aggregate(pipeline);
 
     return res.json({
       items: items.map((item) => ({
@@ -264,6 +292,7 @@ router.get('/questions', requirePermission('library.view'), async (req, res, nex
     const type = String(req.query.type || '').trim();
     const difficulty = String(req.query.difficulty || '').trim();
     const paperHeading = String(req.query.paperHeading || '').trim();
+    const source = String(req.query.source || 'both').trim();
 
     const query = { ...getScopedQuery(req), status: 'active' };
 
@@ -277,13 +306,24 @@ router.get('/questions', requirePermission('library.view'), async (req, res, nex
       ];
     }
 
-    const [items, total] = await Promise.all([
-      Question.find(query)
+    const roles = getCreatorRoleMatch(source);
+    let itemsQuery = Question.find(query)
+      .sort({ paperHeading: 1, createdAt: -1 })
+      .skip((page - 1) * limit)
+      .limit(limit);
+    let countQuery = Question.countDocuments(query);
+
+    if (roles.length > 0) {
+      const creatorIds = await User.find({ role: { $in: roles } }).distinct('_id');
+      query.createdBy = { $in: creatorIds };
+      itemsQuery = Question.find(query)
         .sort({ paperHeading: 1, createdAt: -1 })
         .skip((page - 1) * limit)
-        .limit(limit),
-      Question.countDocuments(query),
-    ]);
+        .limit(limit);
+      countQuery = Question.countDocuments(query);
+    }
+
+    const [items, total] = await Promise.all([itemsQuery, countQuery]);
 
     return res.json({
       items,

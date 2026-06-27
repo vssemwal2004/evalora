@@ -24,6 +24,7 @@ const ViewAdminsPage = lazyPage(() => import('./features/super-admin/ManageAdmin
 const AssessmentOverviewPage = lazyPage(() => import('./features/assessments/AssessmentOverviewPage.jsx'), 'AssessmentOverviewPage');
 const AssessmentReportsPage = lazyPage(() => import('./features/assessments/AssessmentReportsPage.jsx'), 'AssessmentReportsPage');
 const MyAssessmentsPage = lazyPage(() => import('./features/assessments/MyAssessmentsPage.jsx'), 'MyAssessmentsPage');
+const ReviewAssessmentsPage = lazyPage(() => import('./features/assessments/ReviewAssessmentsPage.jsx'), 'ReviewAssessmentsPage');
 const CreateAssessmentPage = lazyPage(() => import('./features/assessments/CreateAssessmentPage.jsx'), 'CreateAssessmentPage');
 const AddCoursesPage = lazyPage(() => import('./features/courses/CoursesPage.jsx'), 'AddCoursesPage');
 const ViewCoursesPage = lazyPage(() => import('./features/courses/CoursesPage.jsx'), 'ViewCoursesPage');
@@ -40,11 +41,16 @@ const StudentAttemptPage = lazyPage(() => import('./features/student/StudentAtte
 const ProctorLivePage = lazyPage(() => import('./features/proctor/ProctorLivePage.jsx'), 'ProctorLivePage');
 const ProctorAlertsPage = lazyPage(() => import('./features/proctor/ProctorAlertsPage.jsx'), 'ProctorAlertsPage');
 const AssessmentStudentsPage = lazyPage(() => import('./features/students/AssessmentStudentsPage.jsx'), 'AssessmentStudentsPage');
+const AssessmentStudentReviewPage = lazyPage(() => import('./features/students/AssessmentStudentsPage.jsx'), 'AssessmentStudentReviewPage');
+const StudentDirectoryPage = lazyPage(() => import('./features/students/StudentDirectoryPage.jsx'), 'StudentDirectoryPage');
 const AssessmentProctorsPage = lazyPage(() => import('./features/proctors/AssessmentProctorsPage.jsx'), 'AssessmentProctorsPage');
+const AssessmentQuestionDirectoryPage = lazyPage(() => import('./features/questions/AssessmentQuestionDirectoryPage.jsx'), 'AssessmentQuestionDirectoryPage');
 const NotFoundPage = lazyPage(() => import('./ui/NotFoundPage.jsx'), 'NotFoundPage');
 const AssignedWorkPage = lazyPage(() => import('./features/work/AssignedWorkPage.jsx'), 'AssignedWorkPage');
 const WorkWorkspacePage = lazyPage(() => import('./features/work/AssignedWorkPage.jsx'), 'WorkWorkspacePage');
 const LandingPage = lazyPage(() => import('./features/landing/LandingPage.jsx'), 'LandingPage');
+const SettingsPage = lazyPage(() => import('./features/settings/SettingsPage.jsx'), 'SettingsPage');
+const ActivityLogPage = lazyPage(() => import('./features/activity/ActivityLogPage.jsx'), 'ActivityLogPage');
 
 function AssessmentBuilderRedirect({ step = 'basic' }) {
   const { assessmentId } = useParams();
@@ -88,6 +94,10 @@ export const router = createBrowserRouter([
             element: page(ViewAdminsPage),
           },
           {
+            path: 'activity',
+            element: page(ActivityLogPage),
+          },
+          {
             path: 'assessments',
             element: page(AssessmentOverviewPage),
           },
@@ -104,6 +114,10 @@ export const router = createBrowserRouter([
             element: page(MyAssessmentsPage),
           },
           {
+            path: 'assessments/review',
+            element: page(ReviewAssessmentsPage),
+          },
+          {
             path: 'assessments/:assessmentId',
             element: <AssessmentBuilderRedirect />,
           },
@@ -113,7 +127,11 @@ export const router = createBrowserRouter([
           },
           {
             path: 'assessments/:assessmentId/questions',
-            element: <AssessmentBuilderRedirect step="questions" />,
+            element: page(AssessmentQuestionDirectoryPage),
+          },
+          {
+            path: 'assessments/:assessmentId/students/review',
+            element: page(AssessmentStudentReviewPage),
           },
           {
             path: 'assessments/:assessmentId/students',
@@ -130,6 +148,10 @@ export const router = createBrowserRouter([
           {
             path: 'courses/view',
             element: page(ViewCoursesPage),
+          },
+          {
+            path: 'students/view',
+            element: page(StudentDirectoryPage),
           },
           {
             path: 'faculty/create',
@@ -162,6 +184,10 @@ export const router = createBrowserRouter([
           {
             path: 'library/view/questions',
             element: page(LibraryFolderQuestionsPage),
+          },
+          {
+            path: 'settings',
+            element: page(SettingsPage),
           },
         ],
       },
@@ -195,6 +221,10 @@ export const router = createBrowserRouter([
             element: page(MyAssessmentsPage),
           },
           {
+            path: 'assessments/review',
+            element: page(ReviewAssessmentsPage),
+          },
+          {
             path: 'assessments/:assessmentId',
             element: <AssessmentBuilderRedirect />,
           },
@@ -204,7 +234,11 @@ export const router = createBrowserRouter([
           },
           {
             path: 'assessments/:assessmentId/questions',
-            element: <AssessmentBuilderRedirect step="questions" />,
+            element: page(AssessmentQuestionDirectoryPage),
+          },
+          {
+            path: 'assessments/:assessmentId/students/review',
+            element: page(AssessmentStudentReviewPage),
           },
           {
             path: 'assessments/:assessmentId/students',
@@ -223,6 +257,10 @@ export const router = createBrowserRouter([
             element: page(ViewCoursesPage),
           },
           {
+            path: 'students/view',
+            element: page(StudentDirectoryPage),
+          },
+          {
             path: 'faculty/create',
             element: page(CreateFacultyPage),
           },
@@ -239,6 +277,10 @@ export const router = createBrowserRouter([
             element: page(ViewModeratorPage),
           },
           {
+            path: 'activity',
+            element: page(ActivityLogPage),
+          },
+          {
             path: 'library',
             element: page(LibraryPage),
           },
@@ -253,6 +295,10 @@ export const router = createBrowserRouter([
           {
             path: 'library/view/questions',
             element: page(LibraryFolderQuestionsPage),
+          },
+          {
+            path: 'settings',
+            element: page(SettingsPage),
           },
         ],
       },
@@ -312,6 +358,10 @@ export const router = createBrowserRouter([
             path: 'library/view/questions',
             element: page(LibraryFolderQuestionsPage),
           },
+          {
+            path: 'settings',
+            element: page(SettingsPage),
+          },
         ],
       },
     ],
@@ -330,6 +380,10 @@ export const router = createBrowserRouter([
           {
             path: 'work/:assignmentId',
             element: page(WorkWorkspacePage),
+          },
+          {
+            path: 'settings',
+            element: page(SettingsPage),
           },
         ],
       },

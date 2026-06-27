@@ -6,6 +6,7 @@ const morgan = require('morgan');
 const rateLimit = require('express-rate-limit');
 const env = require('./config/env');
 const routes = require('./routes');
+const { activityLogger } = require('./middleware/activityLogger');
 const { errorHandler, notFound } = require('./middleware/errorHandler');
 
 const app = express();
@@ -47,7 +48,7 @@ app.use(
   })
 );
 
-app.use('/api', routes);
+app.use('/api', activityLogger, routes);
 
 app.use(notFound);
 app.use(errorHandler);

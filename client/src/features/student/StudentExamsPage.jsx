@@ -10,8 +10,6 @@ import {
   ChevronRight,
   Clock3,
   FileText,
-  Fingerprint,
-  KeyRound,
   Loader2,
   Lock,
   MapPin,
@@ -346,7 +344,6 @@ function DetailRows({ exam }) {
 
 function EntryFlow({ exam, onClose, onAttemptUpdated, onStarted, reverify = false }) {
   const [stage, setStage] = useState(reverify ? "security" : "details");
-  const [password, setPassword] = useState("");
   const [working, setWorking] = useState(false);
   const [error, setError] = useState("");
   const [activeSecurity, setActiveSecurity] = useState(0);
@@ -408,31 +405,10 @@ function EntryFlow({ exam, onClose, onAttemptUpdated, onStarted, reverify = fals
           "Student eligibility and exam assignment verified.",
         );
       }
-      setStage(exam.attempt?.passwordVerified ? "ready" : "password");
-    } catch (requestError) {
-      fail(
-        requestError.response?.data?.message || "Unable to verify this exam.",
-      );
-    } finally {
-      setWorking(false);
-    }
-  }
-
-  async function verifyPassword() {
-    setWorking(true);
-    setError("");
-    try {
-      const response = await api.post(
-        `/student/exams/${exam.assignmentId}/verify-password`,
-        { password },
-      );
-      onAttemptUpdated(response.data.attempt);
-      setPassword("");
       setStage("ready");
     } catch (requestError) {
       fail(
-        requestError.response?.data?.message ||
-          "Incorrect exam password. Please try again.",
+        requestError.response?.data?.message || "Unable to verify this exam.",
       );
     } finally {
       setWorking(false);
@@ -705,59 +681,6 @@ function EntryFlow({ exam, onClose, onAttemptUpdated, onStarted, reverify = fals
               Yes, continue
             </button>
           </div>
-        </div>
-      </ModalFrame>
-    );
-
-  if (stage === "password")
-    return (
-      <ModalFrame onClose={onClose}>
-        <div className="p-7 sm:p-8">
-          <div className="grid h-14 w-14 place-items-center rounded-2xl bg-orange-50 text-orange-600">
-            <KeyRound size={25} />
-          </div>
-          <p className="mt-6 text-xs font-bold uppercase tracking-[0.16em] text-orange-600">
-            Secure access
-          </p>
-          <h2 className="mt-2 text-2xl font-bold text-slate-950">
-            Enter exam password
-          </h2>
-          <p className="mt-2 text-sm leading-6 text-slate-500">
-            Use the password shared by your exam administrator.
-          </p>
-          <label className="mt-6 block text-xs font-bold uppercase tracking-wider text-slate-500">
-            Exam password
-          </label>
-          <div className="relative mt-2">
-            <Lock
-              className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400"
-              size={17}
-            />
-            <input
-              autoFocus
-              type="password"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              onKeyDown={(event) =>
-                event.key === "Enter" && password.trim() && verifyPassword()
-              }
-              className="h-12 w-full rounded-xl border border-slate-200 bg-slate-50 pl-11 pr-4 text-sm font-semibold outline-none transition focus:border-orange-400 focus:bg-white focus:ring-4 focus:ring-orange-100"
-              placeholder="Enter password"
-            />
-          </div>
-          {ActionError}
-          <button
-            className="primary-button mt-6 h-12 w-full justify-center rounded-xl"
-            onClick={verifyPassword}
-            disabled={working || !password.trim()}
-          >
-            {working ? (
-              <Loader2 size={17} className="animate-spin" />
-            ) : (
-              <Fingerprint size={17} />
-            )}
-            Verify and continue
-          </button>
         </div>
       </ModalFrame>
     );

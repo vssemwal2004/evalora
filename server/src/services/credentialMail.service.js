@@ -53,7 +53,7 @@ async function sendStudentCredentialMail({ assessment, student }) {
     `Duration: ${assessment.globalDurationMinutes || 0} minutes`,
     '',
     'Use your assigned credentials on the Evalora login page to access the exam dashboard.',
-    'If your admin has enabled a separate assessment password, it will be shared with you separately.',
+    'Use your unique student password above to access the assessment.',
     '',
     'Regards,',
     'Evalora Team',

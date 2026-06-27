@@ -1,4 +1,3 @@
-const bcrypt = require('bcryptjs');
 const express = require('express');
 const Assessment = require('../models/Assessment');
 const AssessmentAnswer = require('../models/AssessmentAnswer');
@@ -52,7 +51,6 @@ function getRequiredSetupSteps(assessment) {
   const settings = assessment.settings || {};
   const steps = ['verify', 'instructions', 'browser'];
 
-  if (settings.passwordRequired) steps.splice(1, 0, 'password');
   if (settings.cameraRequired || settings.cameraMonitoring || settings.proctoringEnabled) steps.push('camera');
   if (settings.microphoneRequired || settings.noiseMonitoring || settings.proctoringEnabled) steps.push('microphone');
   if (settings.fullscreenEnabled || settings.requireFullscreenBeforeStart) steps.push('fullscreen');
@@ -155,7 +153,7 @@ async function findStudentExam(req, assignmentId) {
   const assessment = await Assessment.findOne({
     _id: assignment.assessmentId,
     visibility: 'visible',
-  }).select('+commonAssessmentPasswordHash');
+  });
 
   if (!assessment) return null;
 
@@ -386,7 +384,7 @@ router.get('/exams', async (req, res, next) => {
       const assessment = await Assessment.findOne({
         _id: assignment.assessmentId,
         visibility: 'visible',
-      }).select('+commonAssessmentPasswordHash');
+      });
 
       if (!assessment) continue;
 
@@ -410,40 +408,8 @@ router.get('/exams', async (req, res, next) => {
   }
 });
 
-router.post('/exams/:assignmentId/verify-password', async (req, res, next) => {
-  try {
-    const found = await findStudentExam(req, req.params.assignmentId);
-    if (!found) return res.status(404).json({ message: 'Assigned exam not found.' });
-
-    const { assessment, assignment } = found;
-    const attempt = await getOrCreateAttempt(assessment, assignment);
-
-    if (!assessment.settings?.passwordRequired) {
-      attempt.passwordVerifiedAt = new Date();
-      upsertSetupStep(attempt, 'password', 'passed', 'Password is not required for this exam.');
-      await attempt.save();
-      return res.json({ verified: true, attempt });
-    }
-
-    if (!assessment.commonAssessmentPasswordHash) {
-      return res.status(400).json({ message: 'Assessment password has not been configured.' });
-    }
-
-    const isValid = await bcrypt.compare(String(req.body.password || ''), assessment.commonAssessmentPasswordHash);
-    if (!isValid) {
-      upsertSetupStep(attempt, 'password', 'failed', 'Incorrect assessment password.');
-      await attempt.save();
-      return res.status(401).json({ message: 'Incorrect assessment password.' });
-    }
-
-    attempt.passwordVerifiedAt = new Date();
-    upsertSetupStep(attempt, 'password', 'passed', 'Assessment password verified.');
-    await attempt.save();
-
-    return res.json({ verified: true, attempt });
-  } catch (error) {
-    return next(error);
-  }
+router.post('/exams/:assignmentId/verify-password', (_req, res) => {
+  return res.status(410).json({ message: 'Assessment password verification is no longer used.' });
 });
 
 router.post('/exams/:assignmentId/setup-step', async (req, res, next) => {
@@ -486,10 +452,6 @@ router.post('/exams/:assignmentId/start', async (req, res, next) => {
     const attempt = await getOrCreateAttempt(assessment, assignment);
     const requiredSteps = getRequiredSetupSteps(assessment);
     const missingSteps = requiredSteps.filter((key) => key !== 'final' && getStepStatus(attempt, key) !== 'passed');
-
-    if (assessment.settings?.passwordRequired && !attempt.passwordVerifiedAt) {
-      missingSteps.push('password');
-    }
 
     if (missingSteps.length > 0) {
       return res.status(400).json({ message: `Complete required setup steps before starting: ${[...new Set(missingSteps)].join(', ')}.` });

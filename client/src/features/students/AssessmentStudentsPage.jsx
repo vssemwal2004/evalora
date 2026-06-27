@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useState } from 'react';
-import { useParams } from 'react-router-dom';
-import readXlsxFile from 'read-excel-file/browser';
-import writeXlsxFile from 'write-excel-file/browser';
-import { AlertTriangle, CheckCircle2, Download, FileSpreadsheet, KeyRound, ListFilter, Mail, Plus, Search, UploadCloud, UserPlus } from 'lucide-react';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
+import { readSheet } from 'read-excel-file/browser';
+import { AlertTriangle, CheckCircle2, Copy, Download, FileSpreadsheet, KeyRound, ListFilter, Mail, MoreHorizontal, Plus, Search, Trash2, UploadCloud, UserPlus } from 'lucide-react';
 import { api } from '../../lib/api';
+import { downloadXlsx } from '../../lib/xlsxDownload';
 import { EmptyState, PageHeader, SectionPanel } from '../../ui/Surface.jsx';
+import { useAuth } from '../auth/AuthContext.jsx';
 
 const initialForm = {
   name: '',
@@ -12,12 +13,24 @@ const initialForm = {
   applicationNumber: '',
   courseName: '',
   courseId: '',
-  eligibilityStatus: 'eligible',
-  eligibilityReason: '',
 };
 
 function statusClass(status) {
   return `status-badge status-${String(status || '').replace(/\s+/g, '_')}`;
+}
+
+function reviewStatus(row) {
+  if (row.issues?.length > 0) return { key: 'error', label: 'Needs Fix' };
+  if (row.assignmentStatus === 'already_assigned') return { key: 'duplicate', label: 'Duplicate' };
+  if (row.canSave && row.decision !== 'skip') return { key: 'ready', label: 'Ready' };
+  return { key: 'skip', label: 'Skipped' };
+}
+
+function reviewStatusClass(status) {
+  if (status === 'ready') return statusClass('active');
+  if (status === 'duplicate') return statusClass('pending');
+  if (status === 'error') return statusClass('failed');
+  return statusClass('draft');
 }
 
 function readImportValue(row, names) {
@@ -37,8 +50,6 @@ function normalizeImportRows(rows) {
     applicationNumber: String(readImportValue(row, ['Application Number', 'Application No', 'application number']) || '').trim(),
     courseName: String(readImportValue(row, ['Course Name', 'Student Course', 'Course']) || '').trim(),
     courseId: String(readImportValue(row, ['Course ID', 'Course Code', 'course id']) || '').trim(),
-    eligibilityStatus: String(readImportValue(row, ['Eligibility Status']) || 'eligible').trim().toLowerCase(),
-    eligibilityReason: String(readImportValue(row, ['Eligibility Reason']) || '').trim(),
   }));
 }
 
@@ -53,27 +64,77 @@ function sheetRowsToObjects(rows) {
     );
 }
 
-export function AssessmentStudentsPage({ assessmentId: assessmentIdProp, embedded = false } = {}) {
+function getReviewStorageKey(assessmentId) {
+  return `evalora:assessment:${assessmentId}:student-review`;
+}
+
+function readStoredReview(assessmentId) {
+  if (!assessmentId) return null;
+  try {
+    return JSON.parse(globalThis.sessionStorage?.getItem(getReviewStorageKey(assessmentId)) || 'null');
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredReview(assessmentId, payload) {
+  if (!assessmentId) return;
+  globalThis.sessionStorage?.setItem(getReviewStorageKey(assessmentId), JSON.stringify(payload));
+}
+
+function clearStoredReview(assessmentId) {
+  if (!assessmentId) return;
+  globalThis.sessionStorage?.removeItem(getReviewStorageKey(assessmentId));
+}
+
+function getRoleBase(pathname) {
+  return pathname.startsWith('/super-admin') ? '/super-admin' : '/admin';
+}
+
+export function AssessmentStudentsPage({ assessmentId: assessmentIdProp, embedded = false, initialView } = {}) {
+  const { user } = useAuth();
   const params = useParams();
+  const navigate = useNavigate();
+  const location = useLocation();
   const assessmentId = assessmentIdProp || params.assessmentId;
-  const defaultEligibility = embedded ? '' : 'eligible';
+  const storedReview = readStoredReview(assessmentId);
+  const requestedView = initialView || location.state?.activeView;
+  const roleBase = getRoleBase(location.pathname);
+  const studentsPath = `${roleBase}/assessments/${assessmentId}/students`;
+  const reviewPath = `${studentsPath}/review`;
   const [assessment, setAssessment] = useState(null);
   const [students, setStudents] = useState([]);
+  const [selectedStudentIds, setSelectedStudentIds] = useState([]);
   const [form, setForm] = useState(initialForm);
-  const [filters, setFilters] = useState({ search: '', course: '', eligibility: defaultEligibility });
-  const [appliedFilters, setAppliedFilters] = useState({ search: '', course: '', eligibility: defaultEligibility });
+  const [filters, setFilters] = useState({ search: '', course: '' });
+  const [appliedFilters, setAppliedFilters] = useState({ search: '', course: '' });
   const [createdCredential, setCreatedCredential] = useState(null);
-  const [bulkPreview, setBulkPreview] = useState([]);
-  const [bulkSummary, setBulkSummary] = useState(null);
+  const [bulkPreview, setBulkPreview] = useState(storedReview?.items || []);
+  const [bulkSummary, setBulkSummary] = useState(storedReview?.summary || null);
   const [bulkResult, setBulkResult] = useState(null);
+  const [reviewSource, setReviewSource] = useState(storedReview?.source || '');
   const [isBulkValidating, setIsBulkValidating] = useState(false);
   const [isBulkSaving, setIsBulkSaving] = useState(false);
   const [isBulkConfirmOpen, setIsBulkConfirmOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [sendingMailId, setSendingMailId] = useState('');
+  const [openActionMenu, setOpenActionMenu] = useState('');
+  const [actionMenuPosition, setActionMenuPosition] = useState({ top: 0, left: 0 });
+  const [deleteTarget, setDeleteTarget] = useState(null);
   const [error, setError] = useState('');
+  const [activeView, setActiveView] = useState(requestedView || (embedded ? 'add' : 'directory'));
   const readyBulkRows = bulkPreview.filter((row) => row.canSave && row.decision !== 'skip').length;
+  const canDeleteStudents = user?.role === 'super_admin' || user?.permissions?.includes('student.remove');
+  const allStudentsSelected = students.length > 0 && students.every((student) => selectedStudentIds.includes(student._id));
+  const reviewCounts = bulkPreview.reduce(
+    (acc, row) => {
+      const status = reviewStatus(row).key;
+      acc[status] = (acc[status] || 0) + 1;
+      return acc;
+    },
+    { ready: 0, duplicate: 0, error: 0, skip: 0 }
+  );
 
   const loadAssessment = useCallback(async () => {
     const response = await api.get(`/assessments/${assessmentId}`);
@@ -93,11 +154,42 @@ export function AssessmentStudentsPage({ assessmentId: assessmentIdProp, embedde
       params: {
         search: appliedFilters.search || undefined,
         course: appliedFilters.course || undefined,
-        eligibility: appliedFilters.eligibility || undefined,
       },
     });
     setStudents(response.data.items);
   }, [appliedFilters, assessmentId]);
+
+  useEffect(() => {
+    setSelectedStudentIds((current) => current.filter((id) => students.some((student) => student._id === id)));
+  }, [students]);
+
+  useEffect(() => {
+    if (initialView === 'review') {
+      const review = readStoredReview(assessmentId);
+      setBulkPreview(review?.items || []);
+      setBulkSummary(review?.summary || null);
+      setReviewSource(review?.source || '');
+      setActiveView('review');
+    }
+  }, [assessmentId, initialView]);
+
+  function changeView(view) {
+    if (view === 'review') {
+      if (embedded) {
+        setActiveView('review');
+        return;
+      }
+      navigate(reviewPath);
+      return;
+    }
+
+    if (location.pathname.endsWith('/review')) {
+      navigate(studentsPath, { state: { activeView: view } });
+      return;
+    }
+
+    setActiveView(view);
+  }
 
   useEffect(() => {
     let ignore = false;
@@ -108,11 +200,7 @@ export function AssessmentStudentsPage({ assessmentId: assessmentIdProp, embedde
       try {
         const [assessmentResponse, studentsResponse] = await Promise.all([
           api.get(`/assessments/${assessmentId}`),
-          api.get(`/assessments/${assessmentId}/students`, {
-            params: {
-              eligibility: defaultEligibility || undefined,
-            },
-          }),
+          api.get(`/assessments/${assessmentId}/students`),
         ]);
         if (!ignore) {
           setAssessment(assessmentResponse.data.assessment);
@@ -137,7 +225,7 @@ export function AssessmentStudentsPage({ assessmentId: assessmentIdProp, embedde
     return () => {
       ignore = true;
     };
-  }, [assessmentId, defaultEligibility]);
+  }, [assessmentId]);
 
   function updateForm(field, value) {
     setForm((current) => ({ ...current, [field]: value }));
@@ -156,13 +244,9 @@ export function AssessmentStudentsPage({ assessmentId: assessmentIdProp, embedde
     setCreatedCredential(null);
 
     try {
-      const response = await api.post(`/assessments/${assessmentId}/students`, form);
-      setCreatedCredential(response.data.student);
-      const selectedCourse = { courseName: form.courseName, courseId: form.courseId };
-      setForm({ ...initialForm, courseName: selectedCourse.courseName, courseId: selectedCourse.courseId });
-      await Promise.all([loadStudents(), loadAssessment()]);
+      await validateStudentRows([{ ...form, rowNumber: 1 }], 'manual');
     } catch (requestError) {
-      setError(requestError.response?.data?.message || 'Unable to add student.');
+      setError(requestError.response?.data?.message || 'Unable to review student.');
     } finally {
       setIsSaving(false);
     }
@@ -173,8 +257,13 @@ export function AssessmentStudentsPage({ assessmentId: assessmentIdProp, embedde
   }
 
   async function sendMail(student) {
+    if (['sent', 'resent'].includes(student.mailStatus)) {
+      return;
+    }
+
     setSendingMailId(student._id);
     setError('');
+    setOpenActionMenu('');
 
     try {
       await api.post(`/assessments/${assessmentId}/students/${student._id}/send-mail`);
@@ -186,9 +275,71 @@ export function AssessmentStudentsPage({ assessmentId: assessmentIdProp, embedde
     }
   }
 
+  async function copyText(value, label) {
+    if (!value) return;
+    try {
+      await navigator.clipboard.writeText(String(value));
+      setError('');
+    } catch {
+      setError(`Unable to copy ${label}.`);
+    }
+    setOpenActionMenu('');
+  }
+
+  function toggleActionMenu(event, studentId) {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const menuWidth = 176;
+    const menuHeight = 176;
+    const gap = 8;
+    const hasRoomBelow = window.innerHeight - rect.bottom >= menuHeight + gap;
+    const top = hasRoomBelow ? rect.bottom + gap : Math.max(gap, rect.top - menuHeight - gap);
+    const left = Math.min(Math.max(gap, rect.right - menuWidth), window.innerWidth - menuWidth - gap);
+
+    setActionMenuPosition({ top, left });
+    setOpenActionMenu((current) => (current === studentId ? '' : studentId));
+  }
+
+  function toggleStudentSelection(studentId) {
+    setSelectedStudentIds((current) =>
+      current.includes(studentId) ? current.filter((id) => id !== studentId) : [...current, studentId]
+    );
+    setOpenActionMenu('');
+  }
+
+  function toggleAllStudents() {
+    setSelectedStudentIds((current) => {
+      const visibleIds = students.map((student) => student._id);
+      const selectedAll = visibleIds.length > 0 && visibleIds.every((id) => current.includes(id));
+      return selectedAll ? current.filter((id) => !visibleIds.includes(id)) : Array.from(new Set([...current, ...visibleIds]));
+    });
+    setOpenActionMenu('');
+  }
+
+  async function deleteStudents(ids) {
+    if (!ids.length) return;
+    setIsSaving(true);
+    setError('');
+    setOpenActionMenu('');
+
+    try {
+      if (ids.length === 1) {
+        await api.delete(`/assessments/${assessmentId}/students/${ids[0]}`);
+      } else {
+        await api.delete(`/assessments/${assessmentId}/students/bulk`, { data: { ids } });
+      }
+      setDeleteTarget(null);
+      setSelectedStudentIds((current) => current.filter((id) => !ids.includes(id)));
+      await Promise.all([loadStudents(), loadAssessment()]);
+    } catch (requestError) {
+      setError(requestError.response?.data?.message || 'Unable to delete student.');
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
   async function downloadTemplate() {
     const firstCourse = assessment?.courses?.[0] || {};
-    await writeXlsxFile(
+    await downloadXlsx(
       [
         [
           { value: 'Student Name', fontWeight: 'bold' },
@@ -196,8 +347,6 @@ export function AssessmentStudentsPage({ assessmentId: assessmentIdProp, embedde
           { value: 'Application Number', fontWeight: 'bold' },
           { value: 'Course Name', fontWeight: 'bold' },
           { value: 'Course ID', fontWeight: 'bold' },
-          { value: 'Eligibility Status', fontWeight: 'bold' },
-          { value: 'Eligibility Reason', fontWeight: 'bold' },
         ],
         [
           { value: 'Aarav Sharma' },
@@ -205,25 +354,36 @@ export function AssessmentStudentsPage({ assessmentId: assessmentIdProp, embedde
           { value: 'APP-001' },
           { value: firstCourse.courseName || 'BCA' },
           { value: firstCourse.courseId || 'BCA-101' },
-          { value: 'eligible' },
-          { value: '' },
         ],
       ],
-      { fileName: `evalora-student-template-${assessment?.assessmentCode || 'assessment'}.xlsx` }
+      `evalora-student-template-${assessment?.assessmentCode || 'assessment'}.xlsx`
     );
   }
 
-  async function validateBulkRows(rows) {
+  async function validateStudentRows(rows, source = 'excel') {
     setIsBulkValidating(true);
     setBulkResult(null);
+    setCreatedCredential(null);
     setError('');
 
     try {
       const response = await api.post(`/assessments/${assessmentId}/students/bulk-validate`, { rows });
+      const reviewPayload = {
+        items: response.data.items,
+        summary: response.data.summary,
+        source,
+      };
+      writeStoredReview(assessmentId, reviewPayload);
       setBulkPreview(response.data.items);
       setBulkSummary(response.data.summary);
+      setReviewSource(source);
+      if (embedded) {
+        setActiveView('review');
+      } else {
+        navigate(reviewPath);
+      }
     } catch (requestError) {
-      setError(requestError.response?.data?.message || 'Unable to validate import file.');
+      setError(requestError.response?.data?.message || 'Unable to validate student data.');
     } finally {
       setIsBulkValidating(false);
     }
@@ -238,8 +398,8 @@ export function AssessmentStudentsPage({ assessmentId: assessmentIdProp, embedde
     }
 
     try {
-      const rows = await readXlsxFile(file);
-      await validateBulkRows(normalizeImportRows(sheetRowsToObjects(rows)));
+      const rows = await readSheet(file);
+      await validateStudentRows(normalizeImportRows(sheetRowsToObjects(rows)), 'excel');
     } catch {
       setError('Unable to read Excel file. Please use the provided template.');
     }
@@ -258,8 +418,20 @@ export function AssessmentStudentsPage({ assessmentId: assessmentIdProp, embedde
     try {
       const response = await api.post(`/assessments/${assessmentId}/students/bulk-save`, { rows: bulkPreview });
       setBulkResult(response.data);
+      setCreatedCredential(response.data.credentials?.length === 1 ? response.data.credentials[0] : null);
       setIsBulkConfirmOpen(false);
+      setBulkPreview([]);
+      setBulkSummary(null);
+      setReviewSource('');
+      clearStoredReview(assessmentId);
+      const selectedCourse = { courseName: form.courseName, courseId: form.courseId };
+      setForm({ ...initialForm, courseName: selectedCourse.courseName, courseId: selectedCourse.courseId });
       await Promise.all([loadStudents(), loadAssessment()]);
+      if (embedded) {
+        setActiveView('directory');
+      } else {
+        navigate(studentsPath, { state: { activeView: 'directory' } });
+      }
     } catch (requestError) {
       setError(requestError.response?.data?.message || 'Unable to save imported students.');
     } finally {
@@ -273,11 +445,17 @@ export function AssessmentStudentsPage({ assessmentId: assessmentIdProp, embedde
         <PageHeader
           eyebrow="Assessment Students"
           title={assessment?.title || 'Students'}
-          description="Manage eligible students, exam credentials, and mail delivery from one dedicated page."
+          description="Manage students, exam credentials, and mail delivery from one dedicated page."
         />
       ) : null}
 
       {error ? <div className="border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">{error}</div> : null}
+
+      {bulkResult ? (
+        <div className="rounded-md border border-green-200 bg-green-50 px-4 py-3 text-sm font-semibold text-green-800">
+          Students updated successfully: {bulkResult.summary?.created || 0} created, {bulkResult.summary?.replaced || 0} replaced, {bulkResult.summary?.skipped || 0} skipped.
+        </div>
+      ) : null}
 
       {createdCredential ? (
         <div className="border border-orange-200 bg-orange-50 px-4 py-3 text-sm text-slate-800">
@@ -299,12 +477,41 @@ export function AssessmentStudentsPage({ assessmentId: assessmentIdProp, embedde
         </div>
       ) : null}
 
-      <div className={embedded ? 'grid gap-5 xl:grid-cols-[430px_1fr]' : 'space-y-5'}>
-        {embedded ? (
-          <div className="space-y-5">
-            <SectionPanel title="Add Student" description="A new Exam ID and password is generated for this assessment only." icon={UserPlus}>
-              <form className="space-y-4 p-5" onSubmit={handleSubmit}>
-              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-1">
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2 shadow-sm">
+        <div>
+          <p className="field-label text-brand-600">Student Phase</p>
+          <p className="mt-1 text-xs font-semibold text-slate-700">
+            {activeView === 'add'
+              ? 'Add students manually or by Excel import.'
+              : activeView === 'review'
+                ? 'Review validated student data before adding it to the assessment.'
+                : 'View added students, credentials, and mail status.'}
+          </p>
+        </div>
+        <div className="inline-flex rounded-md border border-slate-200 bg-slate-50 p-1">
+          {[
+            ['add', 'Add Student'],
+            ['directory', 'Student Directory'],
+            ...(bulkPreview.length > 0 ? [['review', `Review ${bulkPreview.length}`]] : []),
+          ].map(([view, label]) => (
+            <button
+              key={view}
+              className={`h-8 rounded px-3 text-xs font-semibold transition ${activeView === view ? 'bg-white text-brand-700 shadow-sm' : 'text-slate-500 hover:text-slate-900'}`}
+              type="button"
+              onClick={() => changeView(view)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className={embedded ? 'space-y-4' : 'space-y-5'}>
+        {activeView === 'add' ? (
+          <div className="grid gap-4 xl:grid-cols-2">
+            <SectionPanel title="Add Student" description="Creates one unique assessment credential." icon={UserPlus}>
+              <form className="space-y-3 p-4" onSubmit={handleSubmit}>
+              <div className="grid gap-3 md:grid-cols-2">
                 <div>
                   <label className="field-label">Student name</label>
                   <input className="field-input mt-2" value={form.name} onChange={(event) => updateForm('name', event.target.value)} required />
@@ -348,47 +555,25 @@ export function AssessmentStudentsPage({ assessmentId: assessmentIdProp, embedde
                 </select>
               </div>
 
-              <div>
-                <label className="field-label">Eligibility</label>
-                <select
-                  className="field-input mt-2"
-                  value={form.eligibilityStatus}
-                  onChange={(event) => updateForm('eligibilityStatus', event.target.value)}
-                >
-                  <option value="eligible">Eligible</option>
-                  <option value="needs_review">Needs review</option>
-                  <option value="not_eligible">Not eligible</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="field-label">Eligibility reason</label>
-                <textarea
-                  className="field-input mt-2 h-20 py-3"
-                  value={form.eligibilityReason}
-                  onChange={(event) => updateForm('eligibilityReason', event.target.value)}
-                />
-              </div>
-
               <button className="primary-button w-full" type="submit" disabled={isSaving}>
                 <Plus size={16} />
-                {isSaving ? 'Adding student' : 'Add Student'}
+                {isSaving ? 'Reviewing student' : 'Review Student'}
               </button>
               </form>
             </SectionPanel>
 
-            <SectionPanel title="Excel Import" description="Download template, upload Excel, review conflicts, then save." icon={FileSpreadsheet}>
-              <div className="space-y-3 p-5">
-                <button className="secondary-button w-full justify-start" type="button" onClick={downloadTemplate}>
+            <SectionPanel title="Excel Import" description="Upload, review, then save." icon={FileSpreadsheet}>
+              <div className="grid gap-3 p-4 sm:grid-cols-2 xl:grid-cols-1">
+                <button className="secondary-button justify-start" type="button" onClick={downloadTemplate}>
                   <Download size={16} className="text-brand-500" />
                   Download Template
                 </button>
-                <label className="secondary-button w-full cursor-pointer justify-start">
+                <label className="secondary-button cursor-pointer justify-start">
                   <UploadCloud size={16} className="text-brand-500" />
                   {isBulkValidating ? 'Reading File...' : 'Upload Excel'}
                   <input className="hidden" type="file" accept=".xlsx" onChange={handleBulkFile} />
                 </label>
-                <p className="text-xs leading-5 text-slate-500">
+                <p className="text-xs leading-5 text-slate-500 sm:col-span-2 xl:col-span-1">
                   Required columns: Student Name, Student Email, Course Name or Course ID. Application number is optional.
                 </p>
               </div>
@@ -396,11 +581,18 @@ export function AssessmentStudentsPage({ assessmentId: assessmentIdProp, embedde
           </div>
         ) : null}
 
-        <SectionPanel
-          title="Student Directory"
-          description={embedded ? 'Filter assigned candidates by course, credential, and eligibility.' : 'Eligible students for this assessment, with credential visibility and mail actions.'}
-        >
-          <div className="grid gap-3 border-b border-slate-200 px-4 py-3 md:grid-cols-[1fr_180px_190px_auto]">
+        {activeView === 'directory' ? (
+          <SectionPanel
+            title="Student Directory"
+            description={embedded ? 'Compact candidate list with credentials and mail status.' : 'Students for this assessment, with credential visibility and mail actions.'}
+            actions={
+            <button className="secondary-button h-9 px-3 text-xs" type="button" onClick={() => setActiveView('add')}>
+              <Plus size={14} className="text-brand-500" />
+              Add Student
+            </button>
+            }
+          >
+          <div className="grid gap-2 border-b border-slate-200 px-3 py-2.5 md:grid-cols-[1fr_170px_auto]">
             <div className="search-field">
               <Search size={16} className="text-brand-500" />
               <input
@@ -416,34 +608,47 @@ export function AssessmentStudentsPage({ assessmentId: assessmentIdProp, embedde
               value={filters.course}
               onChange={(event) => setFilters((current) => ({ ...current, course: event.target.value }))}
             />
-            <select
-              className="field-input"
-              value={filters.eligibility}
-              onChange={(event) => setFilters((current) => ({ ...current, eligibility: event.target.value }))}
-            >
-              <option value="">All eligibility</option>
-              <option value="eligible">Eligible</option>
-              <option value="needs_review">Needs review</option>
-              <option value="not_eligible">Not eligible</option>
-            </select>
             <button className="secondary-button" type="button" onClick={applyFilters}>
               <ListFilter size={16} className="text-brand-500" />
               Apply
             </button>
           </div>
 
-          <div className="overflow-x-auto">
+          {selectedStudentIds.length > 0 ? (
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 bg-orange-50/70 px-3 py-2">
+              <p className="text-xs font-semibold text-slate-700">{selectedStudentIds.length} student(s) selected</p>
+              <button
+                className="secondary-button h-8 px-3 text-xs text-red-700"
+                type="button"
+                disabled={!canDeleteStudents || isSaving}
+                onClick={() => setDeleteTarget({ type: 'bulk', ids: selectedStudentIds })}
+              >
+                <Trash2 size={14} />
+                Delete selected
+              </button>
+            </div>
+          ) : null}
+
+          <div className="table-popover-safe">
             <table className="data-table">
               <thead>
                 <tr>
+                  <th className="w-10">
+                    <input
+                      className="h-4 w-4 accent-orange-500"
+                      type="checkbox"
+                      checked={allStudentsSelected}
+                      onChange={toggleAllStudents}
+                      aria-label="Select all students"
+                    />
+                  </th>
                   <th>Student</th>
                   <th>Course</th>
                   <th>Exam ID</th>
                   <th>Password</th>
-                  <th>Eligibility</th>
                   <th>Mail</th>
                   <th>Status</th>
-                  <th>Action</th>
+                  <th className="text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-200">
@@ -456,12 +661,21 @@ export function AssessmentStudentsPage({ assessmentId: assessmentIdProp, embedde
                 ) : students.length === 0 ? (
                   <tr>
                     <td colSpan={8}>
-                      <EmptyState title="No students found" description={embedded ? 'Add students manually first; Excel import review will extend this flow later.' : 'Only eligible students for this assessment are shown on this page.'} />
+                      <EmptyState title="No students found" description={embedded ? 'Add students manually first; Excel import review will extend this flow later.' : 'No students have been added to this assessment yet.'} />
                     </td>
                   </tr>
                 ) : (
                   students.map((student) => (
                     <tr key={student._id}>
+                      <td>
+                        <input
+                          className="h-4 w-4 accent-orange-500"
+                          type="checkbox"
+                          checked={selectedStudentIds.includes(student._id)}
+                          onChange={() => toggleStudentSelection(student._id)}
+                          aria-label={`Select ${student.name}`}
+                        />
+                      </td>
                       <td>
                         <p className="font-semibold text-slate-950">{student.name}</p>
                         <p className="text-xs text-slate-500">{student.email}</p>
@@ -473,23 +687,62 @@ export function AssessmentStudentsPage({ assessmentId: assessmentIdProp, embedde
                       </td>
                       <td className="font-semibold text-slate-800">{student.generatedExamId}</td>
                       <td className="font-semibold text-slate-800">{student.passwordPreview || '-'}</td>
-                      <td>
-                        <span className={statusClass(student.eligibilityStatus)}>
-                          {student.eligibilityStatus.replace('_', ' ')}
-                        </span>
-                      </td>
                       <td><span className={statusClass(student.mailStatus)}>{student.mailStatus.replace('_', ' ')}</span></td>
                       <td><span className={statusClass(student.examStatus)}>{student.examStatus.replace('_', ' ')}</span></td>
-                      <td>
+                      <td className="relative text-right">
                         <button
-                          className="secondary-button h-8 px-2 text-xs"
+                          className="secondary-button h-8 w-8 px-0"
                           type="button"
-                          onClick={() => sendMail(student)}
-                          disabled={sendingMailId === student._id}
+                          onClick={(event) => toggleActionMenu(event, student._id)}
+                          aria-label={`Actions for ${student.name}`}
                         >
-                          <Mail size={13} />
-                          {sendingMailId === student._id ? 'Sending' : ['sent', 'resent'].includes(student.mailStatus) ? 'Resend' : 'Send Mail'}
+                          <MoreHorizontal size={15} className="text-brand-500" />
                         </button>
+                        {openActionMenu === student._id ? (
+                          <div
+                            className="fixed z-50 w-44 rounded-md border border-slate-200 bg-white py-1 text-left shadow-xl"
+                            style={{ top: actionMenuPosition.top, left: actionMenuPosition.left }}
+                          >
+                            <button
+                              className="flex w-full items-center gap-2 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                              type="button"
+                              onClick={() => sendMail(student)}
+                              disabled={sendingMailId === student._id || ['sent', 'resent'].includes(student.mailStatus)}
+                            >
+                              <Mail size={14} className="text-brand-500" />
+                              {sendingMailId === student._id ? 'Sending...' : ['sent', 'resent'].includes(student.mailStatus) ? 'Mail sent' : 'Send mail'}
+                            </button>
+                            <button
+                              className="flex w-full items-center gap-2 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                              type="button"
+                              onClick={() => copyText(student.generatedExamId, 'exam ID')}
+                            >
+                              <Copy size={14} className="text-brand-500" />
+                              Copy exam ID
+                            </button>
+                            <button
+                              className="flex w-full items-center gap-2 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                              type="button"
+                              onClick={() => copyText(student.passwordPreview, 'password')}
+                              disabled={!student.passwordPreview}
+                            >
+                              <KeyRound size={14} className="text-brand-500" />
+                              Copy password
+                            </button>
+                            <button
+                              className="flex w-full items-center gap-2 px-3 py-2 text-xs font-semibold text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:text-slate-400"
+                              type="button"
+                              disabled={!canDeleteStudents || isSaving}
+                              onClick={() => {
+                                setDeleteTarget({ type: 'single', ids: [student._id], name: student.name });
+                                setOpenActionMenu('');
+                              }}
+                            >
+                              <Trash2 size={14} />
+                              Delete student
+                            </button>
+                          </div>
+                        ) : null}
                       </td>
                     </tr>
                   ))
@@ -497,47 +750,72 @@ export function AssessmentStudentsPage({ assessmentId: assessmentIdProp, embedde
               </tbody>
             </table>
           </div>
-        </SectionPanel>
+          </SectionPanel>
+        ) : null}
       </div>
 
-      {bulkPreview.length > 0 ? (
+      {activeView === 'review' ? (
         <SectionPanel
-          title="Import Review"
-          description="Resolve duplicate and eligibility decisions before saving. Nothing is added until you confirm."
+          title={reviewSource === 'manual' ? 'Student Review' : 'Import Review'}
+          description={reviewSource === 'manual' ? 'Check the student details, course match, and duplicate status before adding to the assessment.' : 'Resolve duplicate and invalid rows before saving. Nothing is added until you confirm.'}
           icon={FileSpreadsheet}
-          actions={<button className="primary-button" type="button" onClick={() => setIsBulkConfirmOpen(true)} disabled={readyBulkRows === 0}>
-            <CheckCircle2 size={16} />
-            Save {readyBulkRows} Students
-          </button>}
+          actions={
+            <div className="flex flex-wrap items-center gap-2">
+              <button className="secondary-button" type="button" onClick={() => {
+                setBulkPreview([]);
+                setBulkSummary(null);
+                setReviewSource('');
+                clearStoredReview(assessmentId);
+                if (embedded) {
+                  setActiveView('add');
+                } else {
+                  navigate(studentsPath, { state: { activeView: 'add' } });
+                }
+              }}>
+                Clear Review
+              </button>
+              <button className="primary-button" type="button" onClick={() => setIsBulkConfirmOpen(true)} disabled={readyBulkRows === 0}>
+                <CheckCircle2 size={16} />
+                {reviewSource === 'manual' ? 'Add To Assessment' : `Add ${readyBulkRows} Students`}
+              </button>
+            </div>
+          }
         >
-          <div className="grid gap-3 border-b border-slate-200 bg-slate-50/70 p-4 md:grid-cols-5">
-            <div>
+          {bulkPreview.length === 0 ? (
+            <div className="p-6">
+              <EmptyState title="No student review pending" description="Click Add Student or upload Excel data to validate students before adding them to this assessment." />
+            </div>
+          ) : (
+            <>
+          <div className="grid gap-2 border-b border-slate-200 bg-slate-50/70 p-3 md:grid-cols-5">
+            <div className="rounded-md border border-slate-200 bg-white p-2">
               <p className="field-label">Rows</p>
-              <p className="mt-1 text-xl font-semibold text-slate-950">{bulkSummary?.total || 0}</p>
+              <p className="mt-1 text-lg font-semibold text-slate-950">{bulkSummary?.total || 0}</p>
             </div>
-            <div>
+            <div className="rounded-md border border-green-200 bg-white p-2">
               <p className="field-label">Ready</p>
-              <p className="mt-1 text-xl font-semibold text-green-700">{readyBulkRows}</p>
+              <p className="mt-1 text-lg font-semibold text-green-700">{reviewCounts.ready || 0}</p>
             </div>
-            <div>
-              <p className="field-label">Conflicts</p>
-              <p className="mt-1 text-xl font-semibold text-amber-700">{bulkSummary?.conflicts || 0}</p>
+            <div className="rounded-md border border-amber-200 bg-white p-2">
+              <p className="field-label">Duplicates</p>
+              <p className="mt-1 text-lg font-semibold text-amber-700">{reviewCounts.duplicate || 0}</p>
             </div>
-            <div>
+            <div className="rounded-md border border-red-200 bg-white p-2">
               <p className="field-label">Errors</p>
-              <p className="mt-1 text-xl font-semibold text-red-700">{bulkSummary?.errors || 0}</p>
+              <p className="mt-1 text-lg font-semibold text-red-700">{reviewCounts.error || 0}</p>
             </div>
-            <div>
+            <div className="rounded-md border border-slate-200 bg-white p-2">
               <p className="field-label">Course matched</p>
-              <p className="mt-1 text-xl font-semibold text-slate-950">{bulkSummary?.courseMatched || 0}</p>
+              <p className="mt-1 text-lg font-semibold text-slate-950">{bulkSummary?.courseMatched || 0}</p>
             </div>
           </div>
 
-          <div className="overflow-x-auto">
+          <div className="table-wrap">
             <table className="data-table">
               <thead>
                 <tr>
                   <th>Row</th>
+                  <th>Review</th>
                   <th>Student</th>
                   <th>Course</th>
                   <th>Profile</th>
@@ -547,45 +825,55 @@ export function AssessmentStudentsPage({ assessmentId: assessmentIdProp, embedde
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-200">
-                {bulkPreview.map((row) => (
-                  <tr key={`${row.rowNumber}-${row.email || row.name}`}>
-                    <td className="font-semibold text-slate-700">{row.rowNumber}</td>
-                    <td>
-                      <p className="font-semibold text-slate-950">{row.name || '-'}</p>
-                      <p className="text-xs text-slate-500">{row.email || '-'}</p>
-                      {row.applicationNumber ? <p className="text-xs text-slate-400">{row.applicationNumber}</p> : null}
-                    </td>
-                    <td>
-                      <p className="text-sm font-medium text-slate-800">{row.matchedCourseName || row.inputCourseName || '-'}</p>
-                      <p className="text-xs text-slate-500">{row.matchedCourseId || row.inputCourseId || '-'}</p>
-                      <span className={statusClass(row.courseMatchStatus === 'not_matched' ? 'failed' : 'eligible')}>
-                        {row.courseMatchStatus.replaceAll('_', ' ')}
-                      </span>
-                    </td>
-                    <td><span className={statusClass(row.profileStatus === 'existing_profile' ? 'resent' : 'active')}>{row.profileStatus.replaceAll('_', ' ')}</span></td>
-                    <td><span className={statusClass(row.assignmentStatus === 'already_assigned' ? 'pending' : 'active')}>{row.assignmentStatus.replaceAll('_', ' ')}</span></td>
-                    <td>
-                      <select
-                        className="field-input min-w-[150px]"
-                        value={row.decision}
-                        onChange={(event) => updateBulkDecision(row.rowNumber, event.target.value)}
-                        disabled={!row.canSave}
-                      >
-                        {row.allowedDecisions.map((decision) => (
-                          <option key={decision} value={decision}>
-                            {decision.replace('_', ' ')}
-                          </option>
-                        ))}
-                      </select>
-                    </td>
-                    <td className="max-w-[260px] text-xs leading-5 text-slate-500">
-                      {row.issues.length > 0 ? row.issues.join(' ') : 'Ready'}
-                    </td>
-                  </tr>
-                ))}
+                {bulkPreview.map((row) => {
+                  const status = reviewStatus(row);
+                  return (
+                    <tr key={`${row.rowNumber}-${row.email || row.name}`}>
+                      <td className="font-semibold text-slate-700">{row.rowNumber}</td>
+                      <td>
+                        <span className={reviewStatusClass(status.key)}>{status.label}</span>
+                      </td>
+                      <td>
+                        <p className="font-semibold text-slate-950">{row.name || '-'}</p>
+                        <p className="text-xs text-slate-500">{row.email || '-'}</p>
+                        {row.applicationNumber ? <p className="text-xs text-slate-400">{row.applicationNumber}</p> : null}
+                      </td>
+                      <td>
+                        <p className="font-medium text-slate-800">{row.matchedCourseName || row.inputCourseName || '-'}</p>
+                        <p className="text-xs text-slate-500">{row.matchedCourseId || row.inputCourseId || '-'}</p>
+                        <span className={statusClass(row.courseMatchStatus === 'not_matched' ? 'failed' : 'eligible')}>
+                          {row.courseMatchStatus.replaceAll('_', ' ')}
+                        </span>
+                      </td>
+                      <td><span className={statusClass(row.profileStatus === 'existing_profile' ? 'resent' : 'active')}>{row.profileStatus.replaceAll('_', ' ')}</span></td>
+                      <td><span className={statusClass(row.assignmentStatus === 'already_assigned' ? 'pending' : 'active')}>{row.assignmentStatus.replaceAll('_', ' ')}</span></td>
+                      <td>
+                        <select
+                          className="field-input min-w-[140px]"
+                          value={row.decision}
+                          onChange={(event) => updateBulkDecision(row.rowNumber, event.target.value)}
+                          disabled={!row.canSave}
+                        >
+                          {row.allowedDecisions.map((decision) => (
+                            decision === 'not_eligible' ? null : (
+                              <option key={decision} value={decision}>
+                                {decision.replace('_', ' ')}
+                              </option>
+                            )
+                          ))}
+                        </select>
+                      </td>
+                      <td className="max-w-[280px] text-xs leading-5 text-slate-500">
+                        {row.issues.length > 0 ? row.issues.join(' ') : status.key === 'duplicate' ? 'Already exists in this assessment. Choose replace if you want to regenerate credentials.' : 'Ready to add.'}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
+            </>
+          )}
         </SectionPanel>
       ) : null}
 
@@ -646,6 +934,38 @@ export function AssessmentStudentsPage({ assessmentId: assessmentIdProp, embedde
           </div>
         </div>
       ) : null}
+
+      {deleteTarget ? (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/30 px-4">
+          <div className="w-full max-w-md rounded-lg border border-slate-200 bg-white shadow-xl">
+            <div className="flex items-start gap-3 border-b border-slate-200 px-5 py-4">
+              <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-red-200 bg-red-50 text-red-700">
+                <Trash2 size={18} />
+              </span>
+              <div>
+                <h3 className="text-base font-semibold text-slate-950">Delete student from assessment</h3>
+                <p className="mt-1 text-sm leading-6 text-slate-500">
+                  {deleteTarget.type === 'bulk'
+                    ? `This will remove ${deleteTarget.ids.length} selected student(s) from this assessment.`
+                    : `This will remove ${deleteTarget.name || 'this student'} from this assessment.`}
+                </p>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 border-t border-slate-200 bg-slate-50 px-5 py-4">
+              <button className="secondary-button" type="button" onClick={() => setDeleteTarget(null)} disabled={isSaving}>
+                Cancel
+              </button>
+              <button className="primary-button bg-red-600 hover:bg-red-700 focus:ring-red-100" type="button" onClick={() => deleteStudents(deleteTarget.ids)} disabled={isSaving}>
+                {isSaving ? 'Deleting...' : 'Delete'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </section>
   );
+}
+
+export function AssessmentStudentReviewPage() {
+  return <AssessmentStudentsPage initialView="review" />;
 }

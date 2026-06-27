@@ -11,6 +11,8 @@ const roleHome = {
   proctor: '/proctor',
 };
 
+const forcedPasswordRoles = new Set(['admin', 'faculty', 'moderator']);
+
 export function ProtectedRoute({ roles }) {
   const location = useLocation();
   const { user, isAuthenticated, isBootstrapping } = useAuth();
@@ -25,6 +27,10 @@ export function ProtectedRoute({ roles }) {
 
   if (roles?.length && !roles.includes(user.role)) {
     return <Navigate to={roleHome[user.role] || '/login'} replace />;
+  }
+
+  if (forcedPasswordRoles.has(user.role) && user.mustChangePassword && !location.pathname.endsWith('/settings')) {
+    return <Navigate to={`${roleHome[user.role]}/settings?required=1`} replace state={{ from: location }} />;
   }
 
   return <Outlet />;

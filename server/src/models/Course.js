@@ -1,5 +1,9 @@
 const mongoose = require('mongoose');
 
+function normalizeCourseKey(value) {
+  return String(value || '').replace(/\s+/g, '').toLowerCase();
+}
+
 const courseSchema = new mongoose.Schema(
   {
     courseName: {
@@ -13,6 +17,14 @@ const courseSchema = new mongoose.Schema(
       required: true,
       trim: true,
       uppercase: true,
+      index: true,
+    },
+    courseNameKey: {
+      type: String,
+      index: true,
+    },
+    courseCodeKey: {
+      type: String,
       index: true,
     },
     ownerAdminId: {
@@ -41,5 +53,14 @@ const courseSchema = new mongoose.Schema(
 );
 
 courseSchema.index({ ownerAdminId: 1, courseCode: 1 }, { unique: true });
+courseSchema.index({ ownerAdminId: 1, courseNameKey: 1 }, { unique: true, partialFilterExpression: { courseNameKey: { $type: 'string' } } });
+courseSchema.index({ ownerAdminId: 1, courseCodeKey: 1 }, { unique: true, partialFilterExpression: { courseCodeKey: { $type: 'string' } } });
+
+courseSchema.pre('validate', function setCourseKeys(next) {
+  this.courseNameKey = normalizeCourseKey(this.courseName);
+  this.courseCodeKey = normalizeCourseKey(this.courseCode);
+  next();
+});
 
 module.exports = mongoose.model('Course', courseSchema);
+module.exports.normalizeCourseKey = normalizeCourseKey;

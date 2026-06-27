@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import readXlsxFile from 'read-excel-file/browser';
-import writeXlsxFile from 'write-excel-file/browser';
+import { readSheet } from 'read-excel-file/browser';
 import {
   CheckCircle2,
   Download,
@@ -21,6 +20,7 @@ import {
   UserX,
 } from 'lucide-react';
 import { api } from '../../lib/api';
+import { downloadXlsx } from '../../lib/xlsxDownload';
 import { EmptyState, PageHeader, SectionPanel } from '../../ui/Surface.jsx';
 import { useAuth } from '../auth/AuthContext.jsx';
 
@@ -452,7 +452,7 @@ function CreatePeoplePage({ type }) {
   }
 
   async function downloadTemplate() {
-    await writeXlsxFile(
+    await downloadXlsx(
       [
         [
           { value: 'Name', fontWeight: 'bold' },
@@ -465,7 +465,7 @@ function CreatePeoplePage({ type }) {
           { value: 'BCA; MCA; CS101' },
         ],
       ],
-      { fileName: meta.templateName }
+      meta.templateName
     );
   }
 
@@ -492,7 +492,7 @@ function CreatePeoplePage({ type }) {
     if (!file) return;
 
     try {
-      const rows = await readXlsxFile(file);
+      const rows = await readSheet(file);
       await validateRows(normalizeRows(sheetRowsToObjects(rows)));
     } catch {
       setError('Unable to read Excel file. Please use the provided template.');

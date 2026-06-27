@@ -9,7 +9,7 @@ const settingGroups = [
   {
     title: 'Access and Proctoring',
     icon: Lock,
-    keys: ['passwordRequired', 'proctoringEnabled', 'chatEnabled', 'warningMessagesEnabled', 'ufmActionEnabled'],
+    keys: ['proctoringEnabled', 'chatEnabled', 'warningMessagesEnabled', 'ufmActionEnabled'],
   },
   {
     title: 'Browser Security',

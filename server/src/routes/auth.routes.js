@@ -4,9 +4,27 @@ const AssessmentStudent = require('../models/AssessmentStudent');
 const User = require('../models/User');
 const { ROLES } = require('../constants/roles');
 const { authenticate } = require('../middleware/auth');
+const { writeAuditLog } = require('../services/audit.service');
 const { signAuthToken } = require('../utils/tokens');
 
 const router = express.Router();
+
+function isStrongPassword(password) {
+  const value = String(password || '');
+  return value.length > 8 && /[A-Z]/.test(value) && /[^A-Za-z0-9]/.test(value);
+}
+
+function serializeAuthUser(user) {
+  return {
+    id: user._id,
+    name: user.name,
+    email: user.email,
+    loginId: user.loginId,
+    role: user.role,
+    permissions: user.permissions,
+    mustChangePassword: Boolean(user.mustChangePassword),
+  };
+}
 
 router.post('/login', async (req, res, next) => {
   try {
@@ -75,19 +93,20 @@ router.post('/login', async (req, res, next) => {
       authenticatedUser.activeSessionId = crypto.randomBytes(32).toString('hex');
     }
     await authenticatedUser.save();
+    req.user = authenticatedUser;
+
+    await writeAuditLog(req, {
+      action: 'auth.login',
+      targetType: 'User',
+      targetId: authenticatedUser._id,
+      metadata: { loginId: authenticatedUser.loginId, role: authenticatedUser.role },
+    });
 
     const token = signAuthToken(authenticatedUser);
 
     return res.json({
       token,
-      user: {
-        id: authenticatedUser._id,
-        name: authenticatedUser.name,
-        email: authenticatedUser.email,
-        loginId: authenticatedUser.loginId,
-        role: authenticatedUser.role,
-        permissions: authenticatedUser.permissions,
-      },
+      user: serializeAuthUser(authenticatedUser),
     });
   } catch (error) {
     return next(error);
@@ -96,15 +115,58 @@ router.post('/login', async (req, res, next) => {
 
 router.get('/me', authenticate, (req, res) => {
   res.json({
-    user: {
-      id: req.user._id,
-      name: req.user.name,
-      email: req.user.email,
-      loginId: req.user.loginId,
-      role: req.user.role,
-      permissions: req.user.permissions,
-    },
+    user: serializeAuthUser(req.user),
   });
+});
+
+router.patch('/password', authenticate, async (req, res, next) => {
+  try {
+    const { currentPassword, newPassword, confirmPassword } = req.body;
+
+    if (!currentPassword || !newPassword || !confirmPassword) {
+      return res.status(400).json({ message: 'Current password, new password, and confirm password are required.' });
+    }
+
+    if (newPassword !== confirmPassword) {
+      return res.status(400).json({ message: 'New password and confirm password do not match.' });
+    }
+
+    if (!isStrongPassword(newPassword)) {
+      return res.status(400).json({
+        message: 'Use a strong password with more than 8 characters, 1 capital letter, and 1 special character.',
+      });
+    }
+
+    const user = await User.findById(req.user._id).select('+passwordHash +passwordPreview');
+    if (!user) {
+      return res.status(404).json({ message: 'Account not found.' });
+    }
+
+    const isCurrentPasswordValid = await user.comparePassword(currentPassword);
+    if (!isCurrentPasswordValid) {
+      return res.status(400).json({ message: 'Current password is incorrect.' });
+    }
+
+    user.passwordHash = await User.hashPassword(newPassword);
+    user.passwordPreview = undefined;
+    user.mustChangePassword = false;
+    user.passwordChangedAt = new Date();
+    await user.save();
+
+    await writeAuditLog(req, {
+      action: 'password.change',
+      targetType: 'User',
+      targetId: user._id,
+      metadata: { forcedChangeCompleted: Boolean(req.user.mustChangePassword) },
+    });
+
+    return res.json({
+      message: 'Password changed successfully.',
+      user: serializeAuthUser(user),
+    });
+  } catch (error) {
+    return next(error);
+  }
 });
 
 module.exports = router;

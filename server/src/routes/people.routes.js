@@ -20,6 +20,7 @@ const roleConfig = {
     role: ROLES.FACULTY,
     label: 'Faculty',
     viewPermission: 'faculty.view',
+    viewAllPermission: 'faculty.view.all',
     createPermission: 'faculty.create',
     editPermission: 'faculty.edit',
     removePermission: 'faculty.remove',
@@ -28,6 +29,7 @@ const roleConfig = {
     role: ROLES.MODERATOR,
     label: 'Moderator',
     viewPermission: 'moderator.view',
+    viewAllPermission: 'moderator.view.all',
     createPermission: 'moderator.create',
     editPermission: 'moderator.edit',
     removePermission: 'moderator.remove',
@@ -49,7 +51,15 @@ function canSupervise(req, permission) {
   return req.user.role === ROLES.SUPER_ADMIN || req.user.permissions.includes(permission);
 }
 
-function getReadScope(req) {
+function getReadScope(req, config) {
+  if (req.user.role === ROLES.SUPER_ADMIN || req.user.permissions.includes(config.viewAllPermission)) {
+    return {};
+  }
+
+  return { ownerAdminId: req.user._id };
+}
+
+function getOwnedScope(req) {
   return req.user.role === ROLES.SUPER_ADMIN ? {} : { ownerAdminId: req.user._id };
 }
 
@@ -97,7 +107,7 @@ async function resolveAssignedCourses(req, assignedCourses) {
   if (requestedCodes.length === 0) return { courses: [], missingCodes: [] };
 
   const courses = await Course.find({
-    ...getReadScope(req),
+    ...getOwnedScope(req),
     status: 'active',
     courseCode: { $in: requestedCodes },
   }).sort({ courseName: 1 });
@@ -202,7 +212,7 @@ router.get('/:kind', async (req, res, next) => {
 
     const search = String(req.query.search || '').trim();
     const status = String(req.query.status || '').trim();
-    const query = { role: config.role, ...getReadScope(req) };
+    const query = { role: config.role, ...getReadScope(req, config) };
 
     if (status && status !== 'all') query.status = status;
     if (search) {
@@ -270,6 +280,7 @@ router.post('/:kind', async (req, res, next) => {
       status: 'active',
       assignedCourses: resolved.courses,
       ownerAdminId: getWriteOwner(req),
+      mustChangePassword: true,
     });
 
     await writeAuditLog(req, {
@@ -351,6 +362,7 @@ router.post('/:kind/bulk-save', async (req, res, next) => {
         status: 'active',
         assignedCourses: row.assignedCourses,
         ownerAdminId: getWriteOwner(req),
+        mustChangePassword: true,
       });
 
       const serializedPerson = serializePerson({ ...person.toObject(), passwordPreview: password }, true);
@@ -394,7 +406,7 @@ router.patch('/:kind/:id', async (req, res, next) => {
       return res.status(403).json({ message: 'You do not have permission to edit this user.' });
     }
 
-    const person = await User.findOne({ _id: req.params.id, role: config.role, ...getReadScope(req) }).select('+passwordPreview');
+    const person = await User.findOne({ _id: req.params.id, role: config.role, ...getReadScope(req, config) }).select('+passwordPreview');
     if (!person) return res.status(404).json({ message: `${config.label} not found.` });
 
     const updates = {};
@@ -458,7 +470,7 @@ router.patch('/:kind/:id/status', async (req, res, next) => {
       return res.status(400).json({ message: 'Invalid status.' });
     }
 
-    const person = await User.findOne({ _id: req.params.id, role: config.role, ...getReadScope(req) }).select('+passwordPreview');
+    const person = await User.findOne({ _id: req.params.id, role: config.role, ...getReadScope(req, config) }).select('+passwordPreview');
     if (!person) return res.status(404).json({ message: `${config.label} not found.` });
 
     person.status = status;
@@ -477,7 +489,7 @@ router.post('/:kind/:id/send-mail', async (req, res, next) => {
       return res.status(403).json({ message: 'You do not have permission to send mail.' });
     }
 
-    const person = await User.findOne({ _id: req.params.id, role: config.role, ...getReadScope(req) }).select('+passwordPreview');
+    const person = await User.findOne({ _id: req.params.id, role: config.role, ...getReadScope(req, config) }).select('+passwordPreview');
     if (!person) return res.status(404).json({ message: `${config.label} not found.` });
 
     await sendStaffCredentialMail({ person, label: config.label });
@@ -495,7 +507,7 @@ router.delete('/:kind/:id', async (req, res, next) => {
       return res.status(403).json({ message: 'You do not have permission to delete this user.' });
     }
 
-    const person = await User.findOne({ _id: req.params.id, role: config.role, ...getReadScope(req) });
+    const person = await User.findOne({ _id: req.params.id, role: config.role, ...getReadScope(req, config) });
     if (!person) return res.status(404).json({ message: `${config.label} not found.` });
 
     await User.deleteOne({ _id: person._id });

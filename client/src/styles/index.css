@@ -190,23 +190,23 @@ textarea {
   }
 
   .page-header {
-    @apply flex flex-wrap items-end justify-between gap-3 px-0 py-1;
+    @apply flex flex-wrap items-start justify-between gap-2 px-0 py-0;
   }
 
   .panel-heading {
-    @apply flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-slate-50/80 px-4 py-2.5;
+    @apply flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 bg-slate-50/80 px-3 py-2;
   }
 
   .metric-card {
-    @apply rounded-lg border border-slate-200 bg-white p-3 shadow-panel transition hover:border-brand-100 hover:shadow-sm;
+    @apply rounded-lg border border-slate-200 bg-white p-2.5 shadow-panel transition hover:border-brand-100 hover:shadow-sm;
   }
 
   .toolbar {
-    @apply flex flex-wrap items-center gap-2 border-b border-slate-200 bg-white px-3 py-2.5;
+    @apply flex flex-wrap items-center gap-2 border-b border-slate-200 bg-white px-3 py-2;
   }
 
   .search-field {
-    @apply flex h-10 min-w-[260px] flex-1 items-center rounded-md border border-slate-300 bg-white px-3 transition focus-within:border-brand-500 focus-within:ring-2 focus-within:ring-brand-100;
+    @apply flex h-9 min-w-[220px] flex-1 items-center rounded-md border border-slate-300 bg-white px-2.5 transition focus-within:border-brand-500 focus-within:ring-2 focus-within:ring-brand-100;
   }
 
   .table-wrap {
@@ -214,15 +214,15 @@ textarea {
   }
 
   .data-table {
-    @apply min-w-full text-left text-sm;
+    @apply min-w-full text-left text-xs;
   }
 
   .data-table th {
-    @apply whitespace-nowrap bg-slate-50 px-3 py-2.5 text-xs font-semibold uppercase text-slate-500;
+    @apply sticky top-0 z-10 whitespace-nowrap bg-slate-50 px-3 py-2 text-[10px] font-semibold uppercase text-slate-500;
   }
 
   .data-table td {
-    @apply px-3 py-2.5 align-middle;
+    @apply px-3 py-1.5 align-middle;
   }
 
   .field-label {
@@ -230,19 +230,69 @@ textarea {
   }
 
   .field-input {
-    @apply h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-brand-500 focus:ring-2 focus:ring-brand-100;
+    @apply h-9 w-full rounded-md border border-slate-300 bg-white px-2.5 text-xs text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-brand-500 focus:ring-2 focus:ring-brand-100;
   }
 
   .primary-button {
-    @apply inline-flex h-10 items-center justify-center gap-2 rounded-md bg-brand-500 px-4 text-sm font-semibold text-white transition hover:bg-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-100 disabled:cursor-not-allowed disabled:bg-slate-300;
+    @apply inline-flex h-9 items-center justify-center gap-1.5 rounded-md bg-brand-500 px-3 text-xs font-semibold text-white transition hover:bg-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-100 disabled:cursor-not-allowed disabled:bg-slate-300;
   }
 
   .secondary-button {
-    @apply inline-flex h-10 items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 transition hover:border-brand-500 hover:bg-brand-50 hover:text-brand-600;
+    @apply inline-flex h-9 items-center justify-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-700 transition hover:border-brand-500 hover:bg-brand-50 hover:text-brand-600 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400;
   }
 
   .status-badge {
-    @apply inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-semibold capitalize leading-none;
+    @apply inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold capitalize leading-none;
+  }
+
+  .ops-shell .panel {
+    @apply shadow-sm;
+    overflow: visible;
+  }
+
+  .ops-shell .panel.overflow-hidden,
+  .ops-shell .overflow-hidden.panel {
+    overflow: visible !important;
+  }
+
+  .ops-shell .primary-button:not(.h-7):not(.h-8),
+  .ops-shell .secondary-button:not(.h-7):not(.h-8),
+  .ops-shell .field-input:not(textarea) {
+    height: 2.25rem;
+    min-height: 2.25rem;
+    font-size: 0.75rem;
+  }
+
+  .ops-shell textarea.field-input {
+    min-height: 5rem;
+    font-size: 0.75rem;
+  }
+
+  .ops-shell .table-wrap {
+    max-height: none;
+    overflow: visible;
+    scrollbar-gutter: stable;
+  }
+
+  .ops-shell .table-popover-safe {
+    overflow: visible;
+  }
+
+  .ops-shell .data-table th {
+    box-shadow: inset 0 -1px 0 rgb(226 232 240);
+  }
+
+  .ops-shell .data-table td,
+  .ops-shell .data-table th {
+    line-height: 1.35;
+  }
+
+  .ops-shell .data-table tbody tr {
+    @apply border-t border-slate-100;
+  }
+
+  .ops-shell .data-table tbody tr:hover td {
+    @apply bg-slate-50;
   }
 
   .status-draft,
@@ -263,6 +313,7 @@ textarea {
 
   .status-upcoming,
   .status-pending,
+  .status-review,
   .status-needs_review,
   .status-queued,
   .status-resent {

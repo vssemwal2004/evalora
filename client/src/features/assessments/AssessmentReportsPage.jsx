@@ -23,6 +23,7 @@ import {
   X,
 } from 'lucide-react';
 import { api } from '../../lib/api';
+import { downloadXlsx } from '../../lib/xlsxDownload';
 import { useAuth } from '../auth/AuthContext.jsx';
 import { EmptyState } from '../../ui/Surface.jsx';
 
@@ -89,34 +90,34 @@ function canExport(user) {
 
 function buildReportSchema(selectedColumns) {
   const definitions = {
-    assessment: { type: String, value: (row) => row.assessment },
-    assessmentCode: { type: String, value: (row) => row.assessmentCode },
-    name: { type: String, value: (row) => row.name },
-    email: { type: String, value: (row) => row.email },
-    applicationNumber: { type: String, value: (row) => row.applicationNumber || '' },
-    generatedExamId: { type: String, value: (row) => row.generatedExamId },
-    course: { type: String, value: (row) => row.course },
-    status: { type: String, value: (row) => row.status },
-    startedAt: { type: String, value: (row) => formatDate(row.startedAt) },
-    submittedAt: { type: String, value: (row) => formatDate(row.submittedAt) },
-    durationMinutes: { type: Number, value: (row) => row.durationMinutes || 0 },
-    totalQuestions: { type: Number, value: (row) => row.totalQuestions || 0 },
-    answered: { type: Number, value: (row) => row.answered || 0 },
-    correct: { type: Number, value: (row) => row.correct || 0 },
-    wrong: { type: Number, value: (row) => row.wrong || 0 },
-    skipped: { type: Number, value: (row) => row.skipped || 0 },
-    score: { type: Number, value: (row) => row.score || 0 },
-    maxMarks: { type: Number, value: (row) => row.maxMarks || 0 },
-    percentage: { type: Number, value: (row) => row.percentage || 0 },
-    securityScore: { type: Number, value: (row) => row.securityScore || 0 },
-    warningEvents: { type: Number, value: (row) => row.warningEvents || 0 },
-    criticalEvents: { type: Number, value: (row) => row.criticalEvents || 0 },
-    integrity: { type: String, value: (row) => row.integrity },
+    assessment: { cell: (row) => ({ type: String, value: row.assessment || '' }) },
+    assessmentCode: { cell: (row) => ({ type: String, value: row.assessmentCode || '' }) },
+    name: { cell: (row) => ({ type: String, value: row.name || '' }) },
+    email: { cell: (row) => ({ type: String, value: row.email || '' }) },
+    applicationNumber: { cell: (row) => ({ type: String, value: row.applicationNumber || '' }) },
+    generatedExamId: { cell: (row) => ({ type: String, value: row.generatedExamId || '' }) },
+    course: { cell: (row) => ({ type: String, value: row.course || '' }) },
+    status: { cell: (row) => ({ type: String, value: row.status || '' }) },
+    startedAt: { cell: (row) => ({ type: String, value: formatDate(row.startedAt) }) },
+    submittedAt: { cell: (row) => ({ type: String, value: formatDate(row.submittedAt) }) },
+    durationMinutes: { cell: (row) => ({ type: Number, value: row.durationMinutes || 0 }) },
+    totalQuestions: { cell: (row) => ({ type: Number, value: row.totalQuestions || 0 }) },
+    answered: { cell: (row) => ({ type: Number, value: row.answered || 0 }) },
+    correct: { cell: (row) => ({ type: Number, value: row.correct || 0 }) },
+    wrong: { cell: (row) => ({ type: Number, value: row.wrong || 0 }) },
+    skipped: { cell: (row) => ({ type: Number, value: row.skipped || 0 }) },
+    score: { cell: (row) => ({ type: Number, value: row.score || 0 }) },
+    maxMarks: { cell: (row) => ({ type: Number, value: row.maxMarks || 0 }) },
+    percentage: { cell: (row) => ({ type: Number, value: row.percentage || 0 }) },
+    securityScore: { cell: (row) => ({ type: Number, value: row.securityScore || 0 }) },
+    warningEvents: { cell: (row) => ({ type: Number, value: row.warningEvents || 0 }) },
+    criticalEvents: { cell: (row) => ({ type: Number, value: row.criticalEvents || 0 }) },
+    integrity: { cell: (row) => ({ type: String, value: row.integrity || '' }) },
   };
 
   return exportFields
     .filter(([key]) => selectedColumns.includes(key))
-    .map(([key, column]) => ({ column, ...definitions[key] }));
+    .map(([key, column]) => ({ header: { value: column, fontWeight: 'bold' }, ...definitions[key] }));
 }
 
 function ReportPanel({ title, caption, icon: Icon, actions, children, className = '' }) {
@@ -753,14 +754,12 @@ export function AssessmentReportsPage() {
     setIsExporting(true);
     setError('');
     try {
-      const [response, module] = await Promise.all([
-        api.get(`/reports/assessments/${selectedAssessmentId}/export`, { params: appliedFilters }),
-        import('write-excel-file/browser'),
-      ]);
-      await module.default(response.data.rows || [], {
-        schema: buildReportSchema(exportColumns),
-        fileName: `evalora-report-${response.data.assessment.assessmentCode}.xlsx`,
-      });
+      const response = await api.get(`/reports/assessments/${selectedAssessmentId}/export`, { params: appliedFilters });
+      await downloadXlsx(
+        response.data.rows || [],
+        `evalora-report-${response.data.assessment.assessmentCode}.xlsx`,
+        { columns: buildReportSchema(exportColumns) }
+      );
       setExportOpen(false);
     } catch (requestError) {
       setError(requestError.response?.data?.message || 'Unable to export report.');
