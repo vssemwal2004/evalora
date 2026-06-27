@@ -108,10 +108,21 @@ function getWorkspacePath(pathname, assessmentId) {
   return getEditDraftPath(pathname, assessmentId);
 }
 
+function getReviewQuestionPath(pathname, assessmentId) {
+  return pathname.startsWith('/super-admin')
+    ? `/super-admin/assessments/review/${assessmentId}/questions`
+    : `/admin/assessments/review/${assessmentId}/questions`;
+}
+
+function reviewProgress(assessment) {
+  return Number(assessment?.reviewSummary?.progressPercent || 0);
+}
+
 function getActionLabel(action, assessment) {
   const labels = {
     visibility: assessment?.visibility === 'hidden' ? 'Show assessment' : 'Hide assessment',
     duplicate: 'Duplicate assessment',
+    copy_mock: 'Copy assessment as mock',
     complete: 'Mark as complete',
     draft: 'Move to draft',
     delete: 'Delete assessment',
@@ -132,6 +143,10 @@ function getActionDescription(action, assessment) {
 
   if (action === 'duplicate') {
     return 'A new draft copy will be created with courses, settings, and questions. Students and proctors will not be copied.';
+  }
+
+  if (action === 'copy_mock') {
+    return 'A new draft mock assessment will be created. Only student and proctor records are copied; questions, review mapping, schedule, and publish state start fresh.';
   }
 
   if (action === 'complete') {
@@ -200,7 +215,7 @@ function getBulkActionDescription(action, count) {
 const pageCopy = {
   overview: {
     eyebrow: 'Assessment',
-    title: 'Assessment Overview',
+    title: 'Overall Assessments',
     description: 'Create, filter, and track exam operations from one scan-friendly table.',
     showCreate: true,
   },
@@ -213,14 +228,14 @@ const pageCopy = {
   mine: {
     eyebrow: 'My Assessments',
     title: 'My Assessments',
-    description: 'View assessments available in your workspace with course, schedule, and assignment counts.',
+    description: 'View assessments created by you with course, schedule, and assignment counts.',
     showCreate: true,
   },
   review: {
     eyebrow: 'Review Assessments',
     title: 'Review Assessments',
     description: 'Assessments waiting for faculty work or moderator review stay editable here.',
-    showCreate: true,
+    showCreate: false,
     defaultStatus: 'review',
   },
 };
@@ -259,7 +274,8 @@ export function AssessmentOverviewPage({ mode = 'overview' }) {
     try {
       const response = await api.get('/assessments', {
         params: {
-          status: activeStatus,
+          status: mode === 'review' ? 'review' : activeStatus,
+          mine: mode === 'mine' ? 'true' : undefined,
           search: appliedFilters.search || undefined,
           course: appliedFilters.course || undefined,
         },
@@ -271,7 +287,7 @@ export function AssessmentOverviewPage({ mode = 'overview' }) {
     } finally {
       setIsLoading(false);
     }
-  }, [activeStatus, appliedFilters]);
+  }, [activeStatus, appliedFilters, mode]);
 
   useEffect(() => {
     loadAssessments();
@@ -369,6 +385,10 @@ export function AssessmentOverviewPage({ mode = 'overview' }) {
 
       if (action === 'duplicate') {
         await api.post(`/assessments/${assessment._id}/duplicate`);
+      }
+
+      if (action === 'copy_mock') {
+        await api.post(`/assessments/${assessment._id}/copy-as-mock`);
       }
 
       if (action === 'complete') {
@@ -469,25 +489,27 @@ export function AssessmentOverviewPage({ mode = 'overview' }) {
       {error ? <div className="border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">{error}</div> : null}
 
       <SectionPanel>
-        <div className="border-b border-slate-200 px-4 pt-3">
-          <div className="flex flex-wrap gap-1">
-            {statusTabs.map((tab) => (
-              <button
-                key={tab.value}
-                className={`border-b-2 px-3 py-3 text-sm font-semibold transition ${
-                  activeStatus === tab.value
-                    ? 'border-brand-500 text-brand-700'
-                    : 'border-transparent text-slate-500 hover:text-brand-600'
-                }`}
-                type="button"
-                onClick={() => setActiveStatus(tab.value)}
-              >
-                {tab.label}
-                <span className="ml-2 text-xs text-slate-400">{statusCounts?.[tab.value] ?? 0}</span>
-              </button>
-            ))}
+        {mode !== 'review' ? (
+          <div className="border-b border-slate-200 px-4 pt-3">
+            <div className="flex flex-wrap gap-1">
+              {statusTabs.map((tab) => (
+                <button
+                  key={tab.value}
+                  className={`border-b-2 px-3 py-3 text-sm font-semibold transition ${
+                    activeStatus === tab.value
+                      ? 'border-brand-500 text-brand-700'
+                      : 'border-transparent text-slate-500 hover:text-brand-600'
+                  }`}
+                  type="button"
+                  onClick={() => setActiveStatus(tab.value)}
+                >
+                  {tab.label}
+                  <span className="ml-2 text-xs text-slate-400">{statusCounts?.[tab.value] ?? 0}</span>
+                </button>
+              ))}
+            </div>
           </div>
-        </div>
+        ) : null}
 
         <div className="toolbar">
           <div className="search-field">
@@ -508,7 +530,7 @@ export function AssessmentOverviewPage({ mode = 'overview' }) {
           <button className="secondary-button" type="button" onClick={() => setAppliedFilters({ search, course })}>
             Apply Filters
           </button>
-          {selectedItems.length > 0 ? (
+          {mode !== 'review' && selectedItems.length > 0 ? (
             <div className="relative">
               <button
                 className="secondary-button"
@@ -575,15 +597,17 @@ export function AssessmentOverviewPage({ mode = 'overview' }) {
           <table className="data-table">
             <thead>
               <tr>
-                <th className="w-10">
-                  <input
-                    className="h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500"
-                    type="checkbox"
-                    checked={allVisibleSelected}
-                    onChange={toggleSelectAll}
-                    aria-label="Select all visible assessments"
-                  />
-                </th>
+                {mode !== 'review' ? (
+                  <th className="w-10">
+                    <input
+                      className="h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500"
+                      type="checkbox"
+                      checked={allVisibleSelected}
+                      onChange={toggleSelectAll}
+                      aria-label="Select all visible assessments"
+                    />
+                  </th>
+                ) : null}
                 <th>Assessment</th>
                 <th>Created By</th>
                 <th>Courses</th>
@@ -592,6 +616,7 @@ export function AssessmentOverviewPage({ mode = 'overview' }) {
                 <th>Window</th>
                 <th>Duration</th>
                 <th>Status</th>
+                {mode === 'review' ? <th>Progress</th> : null}
                 <th>Actions</th>
               </tr>
             </thead>
@@ -609,15 +634,17 @@ export function AssessmentOverviewPage({ mode = 'overview' }) {
               ) : (
                 items.map((assessment) => (
                   <tr key={assessment._id} className="align-top">
-                    <td>
-                      <input
-                        className="h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500"
-                        type="checkbox"
-                        checked={selectedIds.includes(assessment._id)}
-                        onChange={() => toggleAssessmentSelection(assessment._id)}
-                        aria-label={`Select ${assessment.title}`}
-                      />
-                    </td>
+                    {mode !== 'review' ? (
+                      <td>
+                        <input
+                          className="h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500"
+                          type="checkbox"
+                          checked={selectedIds.includes(assessment._id)}
+                          onChange={() => toggleAssessmentSelection(assessment._id)}
+                          aria-label={`Select ${assessment.title}`}
+                        />
+                      </td>
+                    ) : null}
                     <td>
                       <Link className="font-semibold text-slate-950 hover:text-brand-700" to={getWorkspacePath(location.pathname, assessment._id)}>
                         {assessment.title}
@@ -678,7 +705,24 @@ export function AssessmentOverviewPage({ mode = 'overview' }) {
                         {assessment.operationalStatus || assessment.status}
                       </span>
                     </td>
+                    {mode === 'review' ? (
+                      <td className="min-w-[180px]">
+                        <div className="flex items-center justify-between text-xs font-semibold text-slate-600">
+                          <span>{Number(assessment.reviewSummary?.completed || 0)}/{Number(assessment.reviewSummary?.total || 0)} courses</span>
+                          <span className="text-brand-700">{reviewProgress(assessment)}%</span>
+                        </div>
+                        <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-200">
+                          <div className="h-full rounded-full bg-brand-500" style={{ width: `${reviewProgress(assessment)}%` }} />
+                        </div>
+                      </td>
+                    ) : null}
                     <td>
+                      {mode === 'review' ? (
+                        <Link className="primary-button h-9 px-3 text-xs" to={getReviewQuestionPath(location.pathname, assessment._id)}>
+                          <BookOpen size={14} />
+                          Edit Questions
+                        </Link>
+                      ) : (
                       <div className="relative flex justify-end">
                           <button
                             className="secondary-button h-9 w-9 px-0"
@@ -754,6 +798,14 @@ export function AssessmentOverviewPage({ mode = 'overview' }) {
                               <button
                                 className="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-xs font-semibold text-slate-700 hover:bg-slate-50"
                                 type="button"
+                                onClick={() => requestAction('copy_mock', assessment)}
+                              >
+                                <Copy size={14} className="text-brand-500" />
+                                Copy as mock
+                              </button>
+                              <button
+                                className="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                                type="button"
                                 onClick={() => requestAction(assessment.status === 'completed' ? 'draft' : 'complete', assessment)}
                               >
                                 <CheckCircle2 size={14} className="text-brand-500" />
@@ -803,6 +855,7 @@ export function AssessmentOverviewPage({ mode = 'overview' }) {
                             </div>
                           ) : null}
                       </div>
+                      )}
                     </td>
                   </tr>
                 ))

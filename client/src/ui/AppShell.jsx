@@ -40,7 +40,7 @@ const navByRole = {
         label: 'Assessments',
         icon: ClipboardList,
         children: [
-          { label: 'Overview', to: '/super-admin/assessments', icon: NotebookTabs },
+          { label: 'Overall', to: '/super-admin/assessments', icon: NotebookTabs },
           { label: 'Create Assessment', to: '/super-admin/assessments/create', icon: FilePlus2 },
           { label: 'Assessment Reports', to: '/super-admin/assessments/reports', icon: BarChart3 },
           { label: 'My Assessments', to: '/super-admin/assessments/my', icon: ClipboardList },
@@ -117,7 +117,7 @@ const navByRole = {
         label: 'Assessments',
         icon: ClipboardList,
         children: [
-          { label: 'Overview', to: '/admin/assessments', icon: NotebookTabs, permission: 'assessment.view' },
+          { label: 'Overall', to: '/admin/assessments', icon: NotebookTabs, permission: 'assessment.view' },
           { label: 'Create Assessment', to: '/admin/assessments/create', icon: FilePlus2, permission: 'assessment.create' },
           { label: 'Assessment Reports', to: '/admin/assessments/reports', icon: BarChart3, permission: 'reports.view' },
           { label: 'My Assessments', to: '/admin/assessments/my', icon: ClipboardList, permission: 'assessment.view' },

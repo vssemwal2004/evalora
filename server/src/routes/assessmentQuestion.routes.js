@@ -1,5 +1,6 @@
 const express = require('express');
 const Assessment = require('../models/Assessment');
+const AssessmentAssignment = require('../models/AssessmentAssignment');
 const AssessmentQuestion = require('../models/AssessmentQuestion');
 const Question = require('../models/Question');
 const User = require('../models/User');
@@ -49,22 +50,6 @@ function normalizeCoursePayload(course = {}) {
     courseName: String(course.courseName || '').trim(),
     courseId: String(course.courseId || course.courseCode || '').trim().toUpperCase(),
   };
-}
-
-function sameCourseMapping(left = {}, right = {}) {
-  const normalizedLeft = normalizeCoursePayload(left);
-  const normalizedRight = normalizeCoursePayload(right);
-
-  const nameMatches =
-    normalizedLeft.courseName &&
-    normalizedRight.courseName &&
-    normalizedLeft.courseName.toLowerCase() === normalizedRight.courseName.toLowerCase();
-  const idMatches =
-    normalizedLeft.courseId &&
-    normalizedRight.courseId &&
-    normalizedLeft.courseId === normalizedRight.courseId;
-
-  return Boolean(idMatches || nameMatches);
 }
 
 function normalizeHeading(value) {
@@ -264,19 +249,6 @@ router.post('/from-library-heading', requirePermission('assessment.edit'), async
       return res.status(400).json({ message: 'Select a course before importing questions.' });
     }
 
-    const existingFolderMapping = await AssessmentQuestion.findOne({
-      assessmentId: assessment._id,
-      sourcePaperHeading: exactRegex(paperHeading),
-    }).select('sourcePaperHeading courseName courseId');
-
-    if (existingFolderMapping && !sameCourseMapping(existingFolderMapping, mappedCourse)) {
-      return res.status(400).json({
-        message: `Folder "${paperHeading}" is already mapped to ${existingFolderMapping.courseName}${
-          existingFolderMapping.courseId ? ` (${existingFolderMapping.courseId})` : ''
-        }. One folder can only be mapped to one course.`,
-      });
-    }
-
     const existingCourseMapping = await AssessmentQuestion.findOne({
       assessmentId: assessment._id,
       sourcePaperHeading: { $exists: true, $ne: null },
@@ -387,6 +359,72 @@ router.post('/from-library-heading', requirePermission('assessment.edit'), async
       return res.status(error.statusCode).json({ message: error.message });
     }
 
+    return next(error);
+  }
+});
+
+router.delete('/course-mapping', requirePermission('assessment.edit'), async (req, res, next) => {
+  try {
+    const assessment = await findScopedAssessment(req);
+    if (!assessment) {
+      return res.status(404).json({ message: 'Assessment not found.' });
+    }
+
+    const mappedCourse = normalizeCoursePayload(req.body.course || req.body);
+    if (!mappedCourse.courseName) {
+      return res.status(400).json({ message: 'Select a course before removing question mapping.' });
+    }
+
+    const course = assessment.courses.find((item) => {
+      const nameMatches = item.courseName.toLowerCase() === mappedCourse.courseName.toLowerCase();
+      const idMatches = mappedCourse.courseId && String(item.courseId || '').toUpperCase() === mappedCourse.courseId;
+      return nameMatches || idMatches;
+    });
+
+    if (!course) {
+      return res.status(404).json({ message: 'Course was not found in this assessment.' });
+    }
+
+    const questionResult = await AssessmentQuestion.deleteMany({
+      assessmentId: assessment._id,
+      courseName: course.courseName,
+      ...(course.courseId ? { courseId: course.courseId } : {}),
+    });
+    const assignmentResult = await AssessmentAssignment.deleteMany({
+      assessmentId: assessment._id,
+      courseSubdocumentId: course._id,
+    });
+
+    course.questionCount = 0;
+    course.facultyId = undefined;
+    course.facultyName = '';
+    course.facultyEmail = '';
+    course.moderatorId = undefined;
+    course.moderatorName = '';
+    course.moderatorEmail = '';
+    assessment.updatedBy = req.user._id;
+    await assessment.save();
+
+    await writeAuditLog(req, {
+      action: 'assessment.question.course_mapping.remove',
+      targetType: 'Assessment',
+      targetId: assessment._id,
+      newValue: {
+        courseName: course.courseName,
+        courseId: course.courseId,
+        questionsRemoved: questionResult.deletedCount || 0,
+        assignmentsRemoved: assignmentResult.deletedCount || 0,
+      },
+    });
+
+    return res.json({
+      message: 'Course question mapping removed.',
+      summary: {
+        questionsRemoved: questionResult.deletedCount || 0,
+        assignmentsRemoved: assignmentResult.deletedCount || 0,
+      },
+    });
+  } catch (error) {
     return next(error);
   }
 });

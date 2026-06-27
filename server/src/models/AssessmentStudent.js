@@ -54,7 +54,6 @@ const assessmentStudentSchema = new mongoose.Schema(
       required: true,
       trim: true,
       uppercase: true,
-      unique: true,
       index: true,
     },
     passwordHash: {

@@ -25,6 +25,7 @@ const AssessmentOverviewPage = lazyPage(() => import('./features/assessments/Ass
 const AssessmentReportsPage = lazyPage(() => import('./features/assessments/AssessmentReportsPage.jsx'), 'AssessmentReportsPage');
 const MyAssessmentsPage = lazyPage(() => import('./features/assessments/MyAssessmentsPage.jsx'), 'MyAssessmentsPage');
 const ReviewAssessmentsPage = lazyPage(() => import('./features/assessments/ReviewAssessmentsPage.jsx'), 'ReviewAssessmentsPage');
+const ReviewQuestionMappingPage = lazyPage(() => import('./features/assessments/ReviewQuestionMappingPage.jsx'), 'ReviewQuestionMappingPage');
 const CreateAssessmentPage = lazyPage(() => import('./features/assessments/CreateAssessmentPage.jsx'), 'CreateAssessmentPage');
 const AddCoursesPage = lazyPage(() => import('./features/courses/CoursesPage.jsx'), 'AddCoursesPage');
 const ViewCoursesPage = lazyPage(() => import('./features/courses/CoursesPage.jsx'), 'ViewCoursesPage');
@@ -116,6 +117,10 @@ export const router = createBrowserRouter([
           {
             path: 'assessments/review',
             element: page(ReviewAssessmentsPage),
+          },
+          {
+            path: 'assessments/review/:assessmentId/questions',
+            element: page(ReviewQuestionMappingPage),
           },
           {
             path: 'assessments/:assessmentId',
@@ -223,6 +228,10 @@ export const router = createBrowserRouter([
           {
             path: 'assessments/review',
             element: page(ReviewAssessmentsPage),
+          },
+          {
+            path: 'assessments/review/:assessmentId/questions',
+            element: page(ReviewQuestionMappingPage),
           },
           {
             path: 'assessments/:assessmentId',

@@ -25,19 +25,16 @@ import { api } from '../../lib/api';
 import { AssessmentProctorsPage } from '../proctors/AssessmentProctorsPage.jsx';
 import { AssessmentStudentsPage } from '../students/AssessmentStudentsPage.jsx';
 
-const steps = ['Basic', 'Select Courses', 'Add Questions', 'Faculty', 'Moderator', 'Students', 'Proctors', 'Schedule', 'Settings', 'Review'];
-const stepIcons = [ClipboardList, ClipboardList, BookOpen, UserRoundCog, ShieldCheck, Users, UserRoundCheck, CalendarClock, Settings, Check];
+const steps = ['Basic', 'Select Courses', 'Students', 'Proctors', 'Schedule', 'Settings', 'Review'];
+const stepIcons = [ClipboardList, ClipboardList, Users, UserRoundCheck, CalendarClock, Settings, Check];
 const stepMeta = [
-  { eyebrow: 'Step 1', title: 'Assessment Basics', description: 'Set identity, type, visibility, description, and instructions.' },
+  { eyebrow: 'Step 1', title: 'Assessment Basics', description: 'Set identity, visibility, description, and instructions.' },
   { eyebrow: 'Step 2', title: 'Select Courses', description: 'Choose the master courses that will belong to this assessment.' },
-  { eyebrow: 'Step 3', title: 'Question Source & Mapping', description: 'Choose source, select library folders, and map each folder to a selected course.' },
-  { eyebrow: 'Step 4', title: 'Faculty Assignment', description: 'Assign faculty by selected course. Use bulk select for available course owners.' },
-  { eyebrow: 'Step 5', title: 'Moderator Assignment', description: 'Assign moderators manually for the selected faculty/course paths.' },
-  { eyebrow: 'Step 6', title: 'Students', description: 'Add students first, then review the student directory and credentials below.' },
-  { eyebrow: 'Step 7', title: 'Proctors', description: 'Add proctors, plan distribution, then review proctor credentials and capacity.' },
-  { eyebrow: 'Step 8', title: 'Schedule', description: 'Set exam window and global duration. Assessment password is no longer used.' },
-  { eyebrow: 'Step 9', title: 'Security Settings', description: 'Tune proctoring, browser, AI, scoring, and student result settings.' },
-  { eyebrow: 'Step 10', title: 'Review & Finish', description: 'Check details, routing, and validation before draft, review, or publish.' },
+  { eyebrow: 'Step 3', title: 'Students', description: 'Add students first, then review the student directory and credentials below.' },
+  { eyebrow: 'Step 4', title: 'Proctors', description: 'Add proctors, plan distribution, then review proctor credentials and capacity.' },
+  { eyebrow: 'Step 5', title: 'Schedule', description: 'Set exam window and global duration. Assessment password is no longer used.' },
+  { eyebrow: 'Step 6', title: 'Security Settings', description: 'Tune proctoring, browser, AI, scoring, and student result settings.' },
+  { eyebrow: 'Step 7', title: 'Review & Finish', description: 'Check details and validation before sending the assessment to review.' },
 ];
 const questionSourceOptions = [
   {
@@ -282,14 +279,11 @@ function getStepIndex(value) {
   const stepMap = {
     basic: 0,
     courses: 1,
-    questions: 2,
-    faculty: 3,
-    moderator: 4,
-    students: 5,
-    proctors: 6,
-    schedule: 7,
-    settings: 8,
-    review: 9,
+    students: 2,
+    proctors: 3,
+    schedule: 4,
+    settings: 5,
+    review: 6,
   };
 
   return stepMap[value] ?? 0;
@@ -722,35 +716,17 @@ export function CreateAssessmentPage() {
 
     return [];
   }, [assessmentCourses.length]);
-
   const hasQuestionMapping = questions.length > 0;
   const hasFacultyAssignments = useMemo(
     () => assessmentCourses.some((course) => Boolean(course.facultyId)),
     [assessmentCourses]
   );
-  const hasModeratorForFacultyAssignments = useMemo(
-    () => assessmentCourses.every((course) => !course.facultyId || Boolean(course.moderatorId)),
-    [assessmentCourses]
-  );
-  const hasDuplicateFacultyAssignments = useMemo(() => {
-    const assignedIds = assessmentCourses.map((course) => course.facultyId).filter(Boolean);
-    return new Set(assignedIds).size !== assignedIds.length;
-  }, [assessmentCourses]);
 
   const validation = useMemo(() => {
     const issues = [...basicValidation, ...courseValidation];
-    if (!hasQuestionMapping && !hasFacultyAssignments) {
-      issues.push('Select at least one faculty when no library questions are mapped.');
-    }
-    if (hasDuplicateFacultyAssignments) {
-      issues.push('Each faculty can be assigned to one course only.');
-    }
-    if (hasFacultyAssignments && !hasModeratorForFacultyAssignments) {
-      issues.push('Assign moderator for every selected faculty course.');
-    }
     if (!form.globalDurationMinutes || Number(form.globalDurationMinutes) < 1) issues.push('Duration must be at least 1 minute.');
     return issues;
-  }, [basicValidation, courseValidation, form.globalDurationMinutes, hasDuplicateFacultyAssignments, hasFacultyAssignments, hasModeratorForFacultyAssignments, hasQuestionMapping]);
+  }, [basicValidation, courseValidation, form.globalDurationMinutes]);
 
   const mappedFolders = useMemo(() => {
     const map = new Map();
@@ -832,18 +808,6 @@ export function CreateAssessmentPage() {
   const ActiveStepIcon = stepIcons[activeStep] || ClipboardList;
   const activeStepMeta = stepMeta[activeStep] || { eyebrow: `Step ${activeStep + 1}`, title: steps[activeStep], description: '' };
   const progressPercent = Math.round(((activeStep + 1) / steps.length) * 100);
-  const selectedQuestionSourceOption = questionSourceOptions.find((option) => option.value === questionSource) || questionSourceOptions[1];
-  const requiresReviewBeforePublish = questionSource !== 'admin';
-  const reviewSummary = draftAssessment?.reviewSummary || {};
-  const reviewApprovedForPublish = Boolean(reviewSummary.readyToPublish);
-  const canPublishDirectly = validation.length === 0 && questions.length > 0 && (!requiresReviewBeforePublish || reviewApprovedForPublish);
-  const publishBlockReason = requiresReviewBeforePublish
-    ? reviewApprovedForPublish
-      ? ''
-      : 'Faculty or mixed-source assessments must be reviewed by the assigned moderator before publishing.'
-    : questions.length === 0
-      ? 'Add at least one admin question before publishing.'
-      : '';
 
   useEffect(() => {
     let ignore = false;
@@ -1185,19 +1149,7 @@ export function CreateAssessmentPage() {
       return courseValidation;
     }
 
-    if (step === 3 && !hasQuestionMapping && !hasFacultyAssignments) {
-      return ['Select at least one faculty when no library questions are mapped.'];
-    }
-
-    if (step === 3 && hasDuplicateFacultyAssignments) {
-      return ['Each faculty can be assigned to one course only.'];
-    }
-
-    if (step === 4 && hasFacultyAssignments && !hasModeratorForFacultyAssignments) {
-      return ['Assign moderator for every selected faculty course.'];
-    }
-
-    if (step === 7 && (!form.globalDurationMinutes || Number(form.globalDurationMinutes) < 1)) {
+    if (step === 4 && (!form.globalDurationMinutes || Number(form.globalDurationMinutes) < 1)) {
       return ['Duration must be at least 1 minute.'];
     }
 
@@ -1214,14 +1166,6 @@ export function CreateAssessmentPage() {
     }
 
     if (issues.some((issue) => issue.includes('Duration'))) {
-      return 7;
-    }
-
-    if (issues.some((issue) => issue.includes('faculty'))) {
-      return 3;
-    }
-
-    if (issues.some((issue) => issue.includes('moderator'))) {
       return 4;
     }
 
@@ -1296,7 +1240,7 @@ export function CreateAssessmentPage() {
       return;
     }
 
-    if (activeStep === 0 || activeStep === 1 || activeStep >= 3) {
+    if (activeStep === 0 || activeStep === 1 || activeStep >= 2) {
       const assessment = await saveAssessmentDraft({ requireFullValidation: false });
 
       if (!assessment) {
@@ -1321,44 +1265,6 @@ export function CreateAssessmentPage() {
     const assessment = await saveAssessmentDraft({ requireFullValidation: false });
     if (assessment) {
       navigate(overviewPath, { replace: true });
-    }
-  }
-
-  async function handlePublish() {
-    setError('');
-
-    if (requiresReviewBeforePublish && !reviewApprovedForPublish) {
-      setActiveStep(9);
-      setError('This assessment uses faculty or mixed-source questions, so it must be moved to Review and approved by the moderator before publishing.');
-      return;
-    }
-
-    if (questions.length === 0) {
-      setActiveStep(2);
-      setError('Add at least one question before publishing the assessment.');
-      return;
-    }
-
-    setIsPublishing(true);
-
-    try {
-      const assessment = await saveAssessmentDraft({ requireFullValidation: true });
-
-      if (!assessment?._id) {
-        return;
-      }
-
-      const response = await api.patch(`/assessments/${assessment._id}`, {
-        ...buildAssessmentPayload(),
-        status: 'pending',
-        visibility: 'visible',
-      });
-      setDraftAssessment(response.data.assessment);
-      navigate(overviewPath, { replace: true });
-    } catch (requestError) {
-      setError(requestError.response?.data?.message || 'Unable to publish assessment.');
-    } finally {
-      setIsPublishing(false);
     }
   }
 
@@ -1576,14 +1482,6 @@ export function CreateAssessmentPage() {
                   <input className="field-input mt-2" value={form.assessmentCode} onChange={(event) => updateField('assessmentCode', event.target.value.toUpperCase())} />
                 </div>
                 <div>
-                  <label className="field-label">Type</label>
-                  <select className="field-input mt-2" value={form.type} onChange={(event) => updateField('type', event.target.value)}>
-                    <option value="exam">Exam</option>
-                    <option value="assessment">Assessment</option>
-                    <option value="practice">Practice</option>
-                  </select>
-                </div>
-                <div>
                   <label className="field-label">Visibility</label>
                   <select className="field-input mt-2" value={form.visibility} onChange={(event) => updateField('visibility', event.target.value)}>
                     <option value="hidden">Hidden</option>
@@ -1737,7 +1635,7 @@ export function CreateAssessmentPage() {
             </div>
           ) : null}
 
-          {activeStep === 2 ? (
+          {activeStep === 20 ? (
             <div className="space-y-4">
               <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
                 <div className="flex flex-wrap items-start justify-between gap-3">
@@ -2015,7 +1913,7 @@ export function CreateAssessmentPage() {
             </div>
           ) : null}
 
-          {activeStep === 3 ? (
+          {activeStep === 30 ? (
             <StaffAssignmentPanel
               label="Faculty"
               icon={UserRoundCog}
@@ -2028,7 +1926,7 @@ export function CreateAssessmentPage() {
             />
           ) : null}
 
-          {activeStep === 4 ? (
+          {activeStep === 40 ? (
             <StaffAssignmentPanel
               label="Moderator"
               icon={ShieldCheck}
@@ -2041,7 +1939,7 @@ export function CreateAssessmentPage() {
             />
           ) : null}
 
-          {activeStep === 5 ? (
+          {activeStep === 2 ? (
             draftAssessment?._id ? (
               <AssessmentStudentsPage assessmentId={draftAssessment._id} embedded />
             ) : (
@@ -2051,7 +1949,7 @@ export function CreateAssessmentPage() {
             )
           ) : null}
 
-          {activeStep === 6 ? (
+          {activeStep === 3 ? (
             draftAssessment?._id ? (
               <AssessmentProctorsPage assessmentId={draftAssessment._id} embedded />
             ) : (
@@ -2061,7 +1959,7 @@ export function CreateAssessmentPage() {
             )
           ) : null}
 
-          {activeStep === 7 ? (
+          {activeStep === 4 ? (
             <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
               <div className="border-b border-slate-200 bg-white px-4 py-3">
                 <p className="field-label text-brand-600">Exam Window</p>
@@ -2085,16 +1983,16 @@ export function CreateAssessmentPage() {
             </div>
           ) : null}
 
-          {activeStep === 8 ? <SettingsPanel settings={form.settings} onChange={updateSetting} /> : null}
+          {activeStep === 5 ? <SettingsPanel settings={form.settings} onChange={updateSetting} /> : null}
 
-          {activeStep === 9 ? (
+          {activeStep === 6 ? (
             <div className="space-y-4">
               <div className="grid gap-3 md:grid-cols-4">
                 <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
                   <FileText size={18} className="text-brand-500" />
-                  <p className="mt-3 text-xs font-semibold uppercase text-slate-500">Question Source</p>
-                  <p className="mt-1 text-sm font-semibold text-slate-950">{selectedQuestionSourceOption.label}</p>
-                  <p className="mt-1 text-xs text-slate-500">{questions.length} question(s) mapped</p>
+                  <p className="mt-3 text-xs font-semibold uppercase text-slate-500">Courses</p>
+                  <p className="mt-1 text-sm font-semibold text-slate-950">{assessmentCourses.length} selected</p>
+                  <p className="mt-1 text-xs text-slate-500">Question mapping happens in Review Assessment.</p>
                 </div>
                 <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
                   <CalendarClock size={18} className="text-brand-500" />
@@ -2114,36 +2012,17 @@ export function CreateAssessmentPage() {
               </div>
 
               <div className="grid gap-3 lg:grid-cols-[1.2fr_0.8fr]">
-                <div className={`rounded-xl border p-5 ${requiresReviewBeforePublish ? 'border-amber-200 bg-amber-50' : 'border-green-200 bg-green-50'}`}>
+                <div className="rounded-xl border border-amber-200 bg-amber-50 p-5">
                   <div className="flex items-start gap-3">
-                    <span className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-md border ${requiresReviewBeforePublish ? 'border-amber-200 bg-white text-amber-700' : 'border-green-200 bg-white text-green-700'}`}>
+                    <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-amber-200 bg-white text-amber-700">
                       <ShieldCheck size={18} />
                     </span>
                     <div>
-                      <p className={`text-xs font-semibold uppercase ${requiresReviewBeforePublish ? 'text-amber-700' : 'text-green-700'}`}>
-                        Publish path
-                      </p>
-                      <h3 className="mt-1 text-base font-semibold text-slate-950">
-                        {requiresReviewBeforePublish
-                          ? reviewApprovedForPublish
-                            ? 'Moderator approval complete'
-                            : 'Moderator approval required'
-                          : 'Ready for direct publish'}
-                      </h3>
+                      <p className="text-xs font-semibold uppercase text-amber-700">Review path</p>
+                      <h3 className="mt-1 text-base font-semibold text-slate-950">Question mapping required after creation</h3>
                       <p className="mt-1 text-sm leading-6 text-slate-600">
-                        {requiresReviewBeforePublish
-                          ? reviewApprovedForPublish
-                            ? 'Every assigned faculty course has been approved by its moderator. Publishing is now available.'
-                            : 'Because this assessment uses faculty or mixed question contribution, move it to Review. Faculty and moderators can complete their work before publish is enabled.'
-                          : 'This assessment uses admin questions only, so it can be published directly after validation passes.'}
+                        Move this assessment to Review Assessment. Admin and Superadmin can map questions course-wise there.
                       </p>
-                      {requiresReviewBeforePublish ? (
-                        <div className="mt-3 flex flex-wrap gap-2 text-xs font-semibold">
-                          <span className="status-badge status-active">{Number(reviewSummary.approved || 0)} approved</span>
-                          <span className="status-badge status-pending">{Number(reviewSummary.submitted || 0)} submitted</span>
-                          <span className="status-badge status-draft">{Number(reviewSummary.total || 0)} total</span>
-                        </div>
-                      ) : null}
                     </div>
                   </div>
                 </div>
@@ -2174,10 +2053,8 @@ export function CreateAssessmentPage() {
                     ['Start', formatReviewDateTime(form.startAt)],
                     ['End', formatReviewDateTime(form.endAt)],
                     ['Courses', String(assessmentCourses.length)],
-                    ['Question source', selectedQuestionSourceOption.label],
-                    ['Publish route', requiresReviewBeforePublish ? (reviewApprovedForPublish ? 'Review approved' : 'Review required') : 'Direct publish'],
-                    ['Faculty selected', String(assessmentCourses.filter((course) => course.facultyId).length)],
-                    ['Moderators selected', String(assessmentCourses.filter((course) => course.moderatorId).length)],
+                    ['Question mapping', 'Review Assessment'],
+                    ['Publish route', 'Available after 100% mapping'],
                     ['Students and proctors', `${draftAssessment?.counts?.students || 0} students / ${draftAssessment?.counts?.proctors || 0} proctors`],
                   ].map(([label, value]) => (
                     <div className="bg-slate-50 p-3" key={label}>
@@ -2191,21 +2068,19 @@ export function CreateAssessmentPage() {
               <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
                 <div className="border-b border-slate-200 px-5 py-4">
                   <p className="field-label text-brand-600">Review routing</p>
-                  <p className="mt-1 text-sm font-semibold text-slate-950">Faculty and moderator assignments by course</p>
+                  <p className="mt-1 text-sm font-semibold text-slate-950">Selected courses for review mapping</p>
                 </div>
                 <table className="min-w-full divide-y divide-slate-200 text-left text-sm">
                   <thead className="bg-slate-50 text-xs font-semibold uppercase text-slate-500">
                     <tr>
                       <th className="px-4 py-3">Course</th>
-                      <th className="px-4 py-3">Questions</th>
-                      <th className="px-4 py-3">Faculty</th>
-                      <th className="px-4 py-3">Moderator</th>
+                      <th className="px-4 py-3">Mapping</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-200">
                     {assessmentCourses.length === 0 ? (
                       <tr>
-                        <td colSpan={4} className="px-4 py-6 text-center text-sm font-semibold text-slate-500">
+                        <td colSpan={2} className="px-4 py-6 text-center text-sm font-semibold text-slate-500">
                           No course routing selected yet.
                         </td>
                       </tr>
@@ -2216,9 +2091,7 @@ export function CreateAssessmentPage() {
                             <p className="font-semibold text-slate-950">{course.courseName}</p>
                             <p className="text-xs text-slate-500">{course.courseId || '-'}</p>
                           </td>
-                          <td className="px-4 py-3 font-semibold text-slate-700">{course.questionCount || 0}</td>
-                          <td className="px-4 py-3 text-slate-700">{course.facultyName || 'Not selected'}</td>
-                          <td className="px-4 py-3 text-slate-700">{course.moderatorName || 'Not selected'}</td>
+                          <td className="px-4 py-3 font-semibold text-slate-700">Pending review mapping</td>
                         </tr>
                       ))
                     )}
@@ -2238,21 +2111,9 @@ export function CreateAssessmentPage() {
               ) : (
                 <div className="flex items-center gap-2 rounded-md border border-green-200 bg-green-50 p-4 text-sm font-semibold text-green-700">
                   <Check size={17} />
-                  {requiresReviewBeforePublish && !reviewApprovedForPublish ? 'Assessment is ready to move into Review.' : 'Assessment is ready to publish.'}
+                  Assessment is ready to move into Review.
                 </div>
               )}
-
-              {validation.length === 0 && questions.length === 0 && !publishBlockReason ? (
-                <div className="rounded-md border border-amber-200 bg-amber-50 p-4 text-sm font-semibold text-amber-700">
-                  Add at least one question before publishing.
-                </div>
-              ) : null}
-
-              {validation.length === 0 && publishBlockReason ? (
-                <div className="rounded-md border border-amber-200 bg-amber-50 p-4 text-sm font-semibold text-amber-700">
-                  {publishBlockReason}
-                </div>
-              ) : null}
             </div>
           ) : null}
         </div>
@@ -2272,30 +2133,14 @@ export function CreateAssessmentPage() {
                 {isSaving ? 'Saving draft' : 'Save Draft'}
               </button>
               <button
-                className="secondary-button"
+                className="primary-button"
                 type="button"
                 onClick={handleReviewAssessment}
-                disabled={isSaving || isPublishing || validation.length > 0 || !requiresReviewBeforePublish || reviewApprovedForPublish}
-                title={
-                  reviewApprovedForPublish
-                    ? 'Moderator approval is complete. Publish is available.'
-                    : requiresReviewBeforePublish
-                      ? 'Move this assessment to faculty/moderator review'
-                      : 'Admin-only assessments can publish directly'
-                }
+                disabled={isSaving || isPublishing || validation.length > 0}
+                title="Move this assessment to Review Assessment"
               >
                 <ShieldCheck size={17} className="text-brand-500" />
                 {isPublishing ? 'Sending review' : 'Review Assessment'}
-              </button>
-              <button
-                className="primary-button"
-                type="button"
-                onClick={handlePublish}
-                disabled={isSaving || isPublishing || !canPublishDirectly}
-                title={canPublishDirectly ? 'Publish assessment' : (publishBlockReason || 'Resolve validation issues before publishing')}
-              >
-                <CheckCircle2 size={17} />
-                {isPublishing ? 'Publishing' : 'Publish Assessment'}
               </button>
             </div>
           )}

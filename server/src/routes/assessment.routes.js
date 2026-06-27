@@ -24,6 +24,17 @@ function getScopedQuery(req) {
   return { ownerAdminId: req.user._id };
 }
 
+function getAssessmentListBaseQuery(req) {
+  const query = getScopedQuery(req);
+  const mine = String(req.query.mine || '').trim() === 'true';
+
+  if (mine) {
+    query.createdBy = req.user._id;
+  }
+
+  return query;
+}
+
 function deriveOperationalStatus(assessment) {
   if (assessment.status === 'draft' || assessment.status === 'review' || assessment.status === 'completed') {
     return assessment.status;
@@ -60,6 +71,8 @@ function serializeAssessment(assessment) {
 function emptyReviewSummary() {
   return {
     total: 0,
+    completed: 0,
+    progressPercent: 0,
     assigned: 0,
     in_progress: 0,
     submitted: 0,
@@ -69,33 +82,106 @@ function emptyReviewSummary() {
   };
 }
 
-function buildReviewSummary(counts, assessmentId) {
+function buildReviewSummary(counts, assessmentId, assessment, assignments = [], questionMappings = []) {
   const summary = emptyReviewSummary();
+  const courses = assessment?.courses || [];
+  const assignmentByCourseId = new Map(
+    assignments
+      .filter((item) => String(item.assessmentId) === String(assessmentId))
+      .map((item) => [String(item.courseSubdocumentId), item])
+  );
+  const questionsByCourseKey = new Map(
+    questionMappings
+      .filter((item) => String(item._id.assessmentId) === String(assessmentId))
+      .map((item) => [`${String(item._id.courseName || '').toLowerCase()}|${String(item._id.courseId || '')}`, item])
+  );
+
+  summary.total = courses.length;
+  summary.courses = courses.map((course) => {
+    const assignment = assignmentByCourseId.get(String(course._id));
+    const questionMapping = questionsByCourseKey.get(`${String(course.courseName || '').toLowerCase()}|${String(course.courseId || '')}`);
+    const hasQuestions = Number(course.questionCount || 0) > 0 || Number(questionMapping?.count || 0) > 0;
+    const directlyMapped = hasQuestions && (!assignment || assignment.status === 'assigned');
+    const completed = assignment ? assignment.status === 'approved' || directlyMapped : hasQuestions;
+    const status = completed && directlyMapped ? 'mapped' : assignment?.status || (hasQuestions ? 'mapped' : 'pending');
+    const paperHeading = questionMapping?.paperHeadings?.filter(Boolean)?.[0] || '';
+
+    if (completed) summary.completed += 1;
+
+    return {
+      courseSubdocumentId: course._id,
+      courseName: course.courseName,
+      courseId: course.courseId,
+      questionCount: course.questionCount || 0,
+      facultyName: course.facultyName,
+      facultyEmail: course.facultyEmail,
+      moderatorName: course.moderatorName,
+      moderatorEmail: course.moderatorEmail,
+      status,
+      completed,
+      paperHeading,
+    };
+  });
+
   counts
     .filter((item) => String(item._id.assessmentId) === String(assessmentId))
     .forEach((item) => {
-      summary.total += item.count;
       summary[item._id.status] = item.count;
     });
-  summary.readyToPublish = summary.total > 0 && summary.approved === summary.total;
+  summary.progressPercent = summary.total > 0 ? Math.round((summary.completed / summary.total) * 100) : 0;
+  summary.readyToPublish = summary.total > 0 && summary.completed === summary.total;
   return summary;
 }
 
 async function getReviewSummary(assessmentId) {
-  const counts = await AssessmentAssignment.aggregate([
-    { $match: { assessmentId } },
-    { $group: { _id: { assessmentId: '$assessmentId', status: '$status' }, count: { $sum: 1 } } },
+  const [assessment, assignments, counts, questionMappings] = await Promise.all([
+    Assessment.findById(assessmentId),
+    AssessmentAssignment.find({ assessmentId }),
+    AssessmentAssignment.aggregate([
+      { $match: { assessmentId } },
+      { $group: { _id: { assessmentId: '$assessmentId', status: '$status' }, count: { $sum: 1 } } },
+    ]),
+    AssessmentQuestion.aggregate([
+      { $match: { assessmentId } },
+      {
+        $group: {
+          _id: { assessmentId: '$assessmentId', courseName: '$courseName', courseId: '$courseId' },
+          count: { $sum: 1 },
+          paperHeadings: { $addToSet: '$sourcePaperHeading' },
+        },
+      },
+    ]),
   ]);
-  return buildReviewSummary(counts, assessmentId);
-}
-
-function assessmentNeedsReviewApproval(assessment) {
-  return assessment.questionSource !== 'admin';
+  return buildReviewSummary(counts, assessmentId, assessment, assignments, questionMappings);
 }
 
 function createDuplicateCode(code) {
   const random = Math.random().toString(36).slice(2, 7).toUpperCase();
   return `${String(code || 'EVL').slice(0, 28)}-CP-${random}`.toUpperCase();
+}
+
+function createMockCode(code) {
+  const random = Math.random().toString(36).slice(2, 7).toUpperCase();
+  return `${String(code || 'EVL').slice(0, 25)}-MK-${random}`.toUpperCase();
+}
+
+async function allowReusableAssignmentCredentialIndexes() {
+  await Promise.all(
+    [
+      [AssessmentStudent, 'generatedExamId_1'],
+      [AssessmentProctor, 'generatedProctorId_1'],
+    ].map(async ([Model, indexName]) => {
+      try {
+        const indexes = await Model.collection.indexes();
+        const index = indexes.find((item) => item.name === indexName);
+        if (index?.unique) {
+          await Model.collection.dropIndex(indexName);
+        }
+      } catch (error) {
+        if (error.codeName !== 'IndexNotFound') throw error;
+      }
+    })
+  );
 }
 
 function normalizeDateValue(value) {
@@ -133,7 +219,8 @@ router.get('/', requirePermission('assessment.view'), async (req, res, next) => 
     const status = String(req.query.status || '').trim();
     const course = String(req.query.course || '').trim();
 
-    const query = getScopedQuery(req);
+    const baseQuery = getAssessmentListBaseQuery(req);
+    const query = { ...baseQuery };
 
     if (status && status !== 'all') {
       query.status = status;
@@ -164,13 +251,13 @@ router.get('/', requirePermission('assessment.view'), async (req, res, next) => 
         .limit(limit),
       Assessment.countDocuments(query),
       Assessment.aggregate([
-        { $match: getScopedQuery(req) },
+        { $match: baseQuery },
         { $group: { _id: '$status', count: { $sum: 1 } } },
       ]),
     ]);
 
     const assessmentIds = items.map((assessment) => assessment._id);
-    const [studentMailCounts, proctorMailCounts, reviewCounts] = assessmentIds.length > 0
+    const [studentMailCounts, proctorMailCounts, reviewCounts, reviewAssignments, questionMappings] = assessmentIds.length > 0
       ? await Promise.all([
         AssessmentStudent.aggregate([
           { $match: { assessmentId: { $in: assessmentIds } } },
@@ -184,8 +271,19 @@ router.get('/', requirePermission('assessment.view'), async (req, res, next) => 
           { $match: { assessmentId: { $in: assessmentIds } } },
           { $group: { _id: { assessmentId: '$assessmentId', status: '$status' }, count: { $sum: 1 } } },
         ]),
+        AssessmentAssignment.find({ assessmentId: { $in: assessmentIds } }),
+        AssessmentQuestion.aggregate([
+          { $match: { assessmentId: { $in: assessmentIds } } },
+          {
+            $group: {
+              _id: { assessmentId: '$assessmentId', courseName: '$courseName', courseId: '$courseId' },
+              count: { $sum: 1 },
+              paperHeadings: { $addToSet: '$sourcePaperHeading' },
+            },
+          },
+        ]),
       ])
-      : [[], [], []];
+      : [[], [], [], [], []];
 
     const makeMailSummary = (counts, assessmentId) =>
       counts
@@ -208,7 +306,7 @@ router.get('/', requirePermission('assessment.view'), async (req, res, next) => 
           students: makeMailSummary(studentMailCounts, assessment._id),
           proctors: makeMailSummary(proctorMailCounts, assessment._id),
         },
-        reviewSummary: buildReviewSummary(reviewCounts, assessment._id),
+        reviewSummary: buildReviewSummary(reviewCounts, assessment._id, assessment, reviewAssignments, questionMappings),
       })),
       total,
       page,
@@ -411,7 +509,7 @@ router.patch('/:id', requirePermission('assessment.edit'), async (req, res, next
       };
     }
 
-    if (assessment.status === 'pending' && assessment.visibility === 'visible' && assessmentNeedsReviewApproval(assessment)) {
+    if (assessment.status === 'pending' && assessment.visibility === 'visible') {
       const reviewSummary = await getReviewSummary(assessment._id);
       if (!reviewSummary.readyToPublish) {
         return res.status(400).json({
@@ -518,7 +616,7 @@ router.patch('/:id/status', requirePermission('assessment.complete'), async (req
     const previousStatus = assessment.status;
     assessment.status = status;
 
-    if (assessment.status === 'pending' && assessmentNeedsReviewApproval(assessment)) {
+    if (assessment.status === 'pending') {
       const reviewSummary = await getReviewSummary(assessment._id);
       if (!reviewSummary.readyToPublish) {
         return res.status(400).json({
@@ -547,6 +645,7 @@ router.patch('/:id/status', requirePermission('assessment.complete'), async (req
       assessment: {
         ...assessment.toObject(),
         operationalStatus: deriveOperationalStatus(assessment),
+        reviewSummary: await getReviewSummary(assessment._id),
       },
     });
   } catch (error) {
@@ -655,6 +754,173 @@ router.post('/:id/duplicate', requirePermission('assessment.duplicate'), async (
   }
 });
 
+router.post('/:id/copy-as-mock', requirePermission('assessment.duplicate'), async (req, res, next) => {
+  try {
+    const assessment = await findScopedAssessment(req);
+
+    if (!assessment) {
+      return res.status(404).json({ message: 'Assessment not found.' });
+    }
+
+    await allowReusableAssignmentCredentialIndexes();
+
+    const [sourceStudents, sourceProctors] = await Promise.all([
+      AssessmentStudent.find({ assessmentId: assessment._id }).select('+passwordHash +passwordPreview'),
+      AssessmentProctor.find({ assessmentId: assessment._id }).select('+passwordHash +passwordPreview'),
+    ]);
+
+    const courseStatsByKey = new Map();
+    sourceStudents.forEach((student) => {
+      const key = `${student.courseName}|${student.courseId || ''}`;
+      const current = courseStatsByKey.get(key) || {
+        courseName: student.courseName,
+        courseId: student.courseId || '',
+        studentCount: 0,
+        eligibleStudentCount: 0,
+      };
+      current.studentCount += 1;
+      if (student.eligibilityStatus === 'eligible') {
+        current.eligibleStudentCount += 1;
+      }
+      courseStatsByKey.set(key, current);
+    });
+
+    const mock = await Assessment.create({
+      title: `${assessment.title} Mock`,
+      assessmentCode: createMockCode(assessment.assessmentCode),
+      type: 'mock',
+      description: '',
+      instructions: '',
+      internalNote: '',
+      ownerAdminId: req.user.role === ROLES.SUPER_ADMIN ? assessment.ownerAdminId : req.user._id,
+      createdBy: req.user._id,
+      createdByName: req.user.name,
+      createdByEmail: req.user.email,
+      createdByRole: req.user.role,
+      updatedBy: req.user._id,
+      status: 'draft',
+      visibility: 'hidden',
+      questionSource: 'both',
+      startAt: undefined,
+      endAt: undefined,
+      globalDurationMinutes: undefined,
+      courses: Array.from(courseStatsByKey.values()).map((course) => ({
+        courseName: course.courseName,
+        courseId: course.courseId,
+        questionCount: 0,
+        studentCount: course.studentCount,
+        eligibleStudentCount: course.eligibleStudentCount,
+      })),
+    });
+
+    const copiedStudentBySourceId = new Map();
+    const copiedStudents = [];
+
+    for (const student of sourceStudents) {
+      const copiedStudent = await AssessmentStudent.create({
+        assessmentId: mock._id,
+        studentProfileId: student.studentProfileId,
+        ownerAdminId: mock.ownerAdminId,
+        name: student.name,
+        email: student.email,
+        applicationNumber: student.applicationNumber,
+        courseName: student.courseName,
+        courseId: student.courseId,
+        generatedExamId: student.generatedExamId,
+        passwordHash: student.passwordHash,
+        passwordPreview: student.passwordPreview,
+        eligibilityStatus: student.eligibilityStatus,
+        eligibilityReason: student.eligibilityReason,
+        courseMatchStatus: student.courseMatchStatus,
+        mailStatus: 'not_sent',
+        examStatus: 'not_started',
+        addedBy: req.user._id,
+      });
+
+      copiedStudentBySourceId.set(String(student._id), copiedStudent);
+      copiedStudents.push(copiedStudent);
+    }
+
+    const studentProctorUpdates = [];
+    const copiedProctors = [];
+
+    for (const proctor of sourceProctors) {
+      const assignedStudents = (proctor.assignedStudents || [])
+        .map((assignedStudent) => copiedStudentBySourceId.get(String(assignedStudent.assessmentStudentId)))
+        .filter(Boolean)
+        .map((student) => ({
+          assessmentStudentId: student._id,
+          name: student.name,
+          email: student.email,
+          generatedExamId: student.generatedExamId,
+          courseName: student.courseName,
+          courseId: student.courseId,
+        }));
+
+      const copiedProctor = await AssessmentProctor.create({
+        assessmentId: mock._id,
+        proctorProfileId: proctor.proctorProfileId,
+        ownerAdminId: mock.ownerAdminId,
+        name: proctor.name,
+        email: proctor.email,
+        generatedProctorId: proctor.generatedProctorId,
+        passwordHash: proctor.passwordHash,
+        passwordPreview: proctor.passwordPreview,
+        assignedStudents,
+        mailStatus: 'not_sent',
+        activeStatus: 'offline',
+        addedBy: req.user._id,
+      });
+
+      assignedStudents.forEach((student) => {
+        studentProctorUpdates.push({
+          updateOne: {
+            filter: { _id: student.assessmentStudentId },
+            update: { $set: { assignedProctorId: copiedProctor._id } },
+          },
+        });
+      });
+      copiedProctors.push(copiedProctor);
+    }
+
+    if (studentProctorUpdates.length > 0) {
+      await AssessmentStudent.bulkWrite(studentProctorUpdates);
+    }
+
+    mock.counts.proctors = copiedProctors.length;
+    await mock.save();
+
+    await writeAuditLog(req, {
+      action: 'assessment.copy_as_mock',
+      targetType: 'Assessment',
+      targetId: assessment._id,
+      newValue: {
+        mockAssessmentId: mock._id,
+        mockAssessmentCode: mock.assessmentCode,
+        studentsCopied: copiedStudents.length,
+        proctorsCopied: copiedProctors.length,
+      },
+    });
+
+    return res.status(201).json({
+      assessment: {
+        ...serializeAssessment(mock),
+        reviewSummary: emptyReviewSummary(),
+      },
+      summary: {
+        studentsCopied: copiedStudents.length,
+        proctorsCopied: copiedProctors.length,
+      },
+    });
+  } catch (error) {
+    if (error.code === 11000) {
+      return res.status(409).json({ message: 'Unable to generate a unique mock assessment copy. Try again.' });
+    }
+
+    return next(error);
+  }
+});
+
 router.post('/:id/reset-attempts', requirePermission('assessment.edit'), async (req, res, next) => {
   try {
     const assessment = await findScopedAssessment(req);
@@ -748,6 +1014,7 @@ router.get('/:id', requirePermission('assessment.view'), async (req, res, next) 
       assessment: {
         ...assessment.toObject(),
         operationalStatus: deriveOperationalStatus(assessment),
+        reviewSummary: await getReviewSummary(assessment._id),
       },
     });
   } catch (error) {
