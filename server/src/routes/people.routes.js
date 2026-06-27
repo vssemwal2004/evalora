@@ -11,7 +11,7 @@ const router = express.Router();
 
 function defaultStaffPermissions(role) {
   if (role === ROLES.FACULTY) return ['work.view', 'assessment.questions.add', 'assessment.questions.edit', 'assessment.submit', 'library.view', 'library.create', 'library.edit', 'library.archive'];
-  if (role === ROLES.MODERATOR) return ['work.view', 'assessment.review'];
+  if (role === ROLES.MODERATOR) return ['work.view', 'assessment.review', 'assessment.questions.edit'];
   return [];
 }
 

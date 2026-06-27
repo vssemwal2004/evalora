@@ -12,6 +12,8 @@ const ADMIN_PERMISSIONS = Object.freeze([
   'assessment.view',
   'assessment.create',
   'assessment.edit',
+  'assessment.review.send',
+  'assessment.publish',
   'assessment.delete',
   'assessment.duplicate',
   'assessment.hide',

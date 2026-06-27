@@ -23,7 +23,7 @@ const SECURITY_HOLD_TYPES = [
 ];
 
 function deriveOperationalStatus(assessment) {
-  if (assessment.status === 'draft' || assessment.status === 'completed') {
+  if (['draft', 'review', 'completed'].includes(assessment.status)) {
     return assessment.status;
   }
 
@@ -35,6 +35,10 @@ function deriveOperationalStatus(assessment) {
   if (now < start) return 'upcoming';
   if (now >= start && now <= end) return 'active';
   return 'completed';
+}
+
+function isPublishedForStudents(assessment) {
+  return assessment?.visibility === 'visible' && !['draft', 'review'].includes(assessment.status);
 }
 
 function isSameCourse(question, assignment) {
@@ -155,7 +159,7 @@ async function findStudentExam(req, assignmentId) {
     visibility: 'visible',
   });
 
-  if (!assessment) return null;
+  if (!assessment || !isPublishedForStudents(assessment)) return null;
 
   return { assignment, assessment };
 }
@@ -386,7 +390,7 @@ router.get('/exams', async (req, res, next) => {
         visibility: 'visible',
       });
 
-      if (!assessment) continue;
+      if (!assessment || !isPublishedForStudents(assessment)) continue;
 
       const [attempt, questionSummary] = await Promise.all([
         AssessmentAttempt.findOne({ assessmentId: assessment._id, assessmentStudentId: assignment._id }),

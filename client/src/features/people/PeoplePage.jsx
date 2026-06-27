@@ -26,14 +26,19 @@ import { useAuth } from '../auth/AuthContext.jsx';
 
 const staffPermissionOptions = {
   faculty: [
-    ['work.view', 'View assigned work'], ['assessment.questions.add', 'Add assessment questions'],
-    ['assessment.questions.edit', 'Edit assessment questions'], ['assessment.submit', 'Submit to moderator'],
-    ['library.view', 'View personal library'], ['library.create', 'Create library questions'],
-    ['library.edit', 'Edit library questions'], ['library.archive', 'Archive library questions'],
+    ['work.view', 'View assigned assessment work'],
+    ['assessment.questions.add', 'Import/add questions for assigned courses'],
+    ['assessment.questions.edit', 'Edit assigned assessment questions'],
+    ['assessment.submit', 'Submit completed question work to moderator'],
+    ['library.view', 'View personal question library'],
+    ['library.create', 'Create personal library questions'],
+    ['library.edit', 'Edit personal library questions'],
+    ['library.archive', 'Archive personal library questions'],
   ],
   moderator: [
-    ['work.view', 'View review queue'], ['assessment.review', 'Approve or reject assessments'],
-    ['assessment.questions.edit', 'Edit assessment questions'],
+    ['work.view', 'View moderator review queue'],
+    ['assessment.review', 'Approve or reject faculty question work'],
+    ['assessment.questions.edit', 'Edit questions during moderation'],
   ],
 };
 

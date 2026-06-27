@@ -356,6 +356,19 @@ router.patch('/:id', requirePermission('assessment.edit'), async (req, res, next
       return res.status(400).json({ message: 'Invalid assessment status.' });
     }
 
+    if (status === 'review' && req.user.role !== ROLES.SUPER_ADMIN && !req.user.permissions.includes('assessment.review.send')) {
+      return res.status(403).json({ message: 'You do not have permission to send assessments for review.' });
+    }
+
+    if (
+      status === 'pending' &&
+      visibility === 'visible' &&
+      req.user.role !== ROLES.SUPER_ADMIN &&
+      !req.user.permissions.includes('assessment.publish')
+    ) {
+      return res.status(403).json({ message: 'You do not have permission to publish assessments.' });
+    }
+
     if (
       Object.prototype.hasOwnProperty.call(req.body, 'globalDurationMinutes') &&
       Number(globalDurationMinutes) < 1
@@ -486,6 +499,14 @@ router.patch('/:id/status', requirePermission('assessment.complete'), async (req
 
     if (!['draft', 'review', 'upcoming', 'active', 'pending', 'completed'].includes(status)) {
       return res.status(400).json({ message: 'Invalid assessment status.' });
+    }
+
+    if (status === 'review' && req.user.role !== ROLES.SUPER_ADMIN && !req.user.permissions.includes('assessment.review.send')) {
+      return res.status(403).json({ message: 'You do not have permission to send assessments for review.' });
+    }
+
+    if (status === 'pending' && req.user.role !== ROLES.SUPER_ADMIN && !req.user.permissions.includes('assessment.publish')) {
+      return res.status(403).json({ message: 'You do not have permission to publish assessments.' });
     }
 
     const assessment = await findScopedAssessment(req);
