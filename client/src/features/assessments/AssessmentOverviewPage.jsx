@@ -16,9 +16,11 @@ import {
   Search,
   Trash2,
   RotateCcw,
+  ShieldCheck,
   UserRoundCheck,
   Users,
   Video,
+  X,
 } from 'lucide-react';
 import { api } from '../../lib/api';
 import { EmptyState, PageHeader, SectionPanel } from '../../ui/Surface.jsx';
@@ -118,6 +120,178 @@ function reviewProgress(assessment) {
   return Number(assessment?.reviewSummary?.progressPercent || 0);
 }
 
+function reviewCourseTone(status, completed) {
+  if (completed || status === 'mapped' || status === 'approved') {
+    return {
+      label: status === 'mapped' ? 'Admin' : 'Ready',
+      className: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+      bar: 'bg-emerald-500',
+      step: 3,
+    };
+  }
+
+  const tones = {
+    pending: {
+      label: 'Pending',
+      className: 'border-amber-200 bg-amber-50 text-amber-700',
+      bar: 'bg-amber-500',
+      step: 0,
+    },
+    assigned: {
+      label: 'Faculty',
+      className: 'border-sky-200 bg-sky-50 text-sky-700',
+      bar: 'bg-sky-500',
+      step: 1,
+    },
+    in_progress: {
+      label: 'Faculty',
+      className: 'border-sky-200 bg-sky-50 text-sky-700',
+      bar: 'bg-sky-500',
+      step: 1,
+    },
+    submitted: {
+      label: 'Moderator',
+      className: 'border-violet-200 bg-violet-50 text-violet-700',
+      bar: 'bg-violet-500',
+      step: 2,
+    },
+    rejected: {
+      label: 'Rework',
+      className: 'border-rose-200 bg-rose-50 text-rose-700',
+      bar: 'bg-rose-500',
+      step: 1,
+    },
+  };
+
+  return tones[status] || tones.pending;
+}
+
+function ReviewTimelinePopover({ assessment }) {
+  const [isOpen, setIsOpen] = useState(false);
+  const courses = assessment.reviewSummary?.courses || [];
+  const total = Number(assessment.reviewSummary?.total || 0);
+  const completed = Number(assessment.reviewSummary?.completed || 0);
+  const pendingModerator = courses.filter((course) => course.status === 'submitted').length;
+  const pendingFaculty = courses.filter((course) => ['assigned', 'in_progress', 'rejected'].includes(course.status)).length;
+  const progress = reviewProgress(assessment);
+
+  useEffect(() => {
+    if (!isOpen) return undefined;
+
+    function closeOnEscape(event) {
+      if (event.key === 'Escape') {
+        setIsOpen(false);
+      }
+    }
+
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [isOpen]);
+
+  return (
+    <div className="relative">
+      <button
+        className="w-full rounded-md px-1 py-1 text-left outline-none transition hover:bg-slate-50 focus:bg-slate-50"
+        type="button"
+        onClick={() => setIsOpen(true)}
+        aria-label="Open review progress diagram"
+      >
+        <div className="flex items-center justify-between text-xs font-semibold text-slate-600">
+          <span>{completed}/{total} courses</span>
+          <span className="text-brand-700">{progress}%</span>
+        </div>
+        <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-200">
+          <div className="h-full rounded-full bg-brand-500 transition-all duration-500" style={{ width: `${progress}%` }} />
+        </div>
+      </button>
+
+      {isOpen ? (
+        <div className="fixed inset-0 z-[70] bg-slate-950/35 p-4" role="dialog" aria-modal="true">
+          <button className="absolute inset-0 cursor-default" type="button" aria-label="Close review progress diagram" onClick={() => setIsOpen(false)} />
+          <div className="relative mx-auto mt-8 flex max-h-[82vh] w-full max-w-5xl flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3">
+              <div className="flex flex-wrap items-center gap-2 text-xs font-bold">
+                <span className="inline-flex items-baseline gap-1.5 rounded-full border border-brand-100 bg-brand-50 px-3 py-1 text-brand-700">
+                  {progress}%
+                  <span className="text-[10px] font-semibold text-brand-700/55">progress</span>
+                </span>
+                <span className="inline-flex items-baseline gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-emerald-700">
+                  {completed}/{total}
+                  <span className="text-[10px] font-semibold text-emerald-700/55">ready</span>
+                </span>
+                <span className="inline-flex items-baseline gap-1.5 rounded-full border border-sky-200 bg-sky-50 px-3 py-1 text-sky-700">
+                  {pendingFaculty}
+                  <span className="text-[10px] font-semibold text-sky-700/55">faculty</span>
+                </span>
+                <span className="inline-flex items-baseline gap-1.5 rounded-full border border-violet-200 bg-violet-50 px-3 py-1 text-violet-700">
+                  {pendingModerator}
+                  <span className="text-[10px] font-semibold text-violet-700/55">moderator</span>
+                </span>
+              </div>
+              <button className="grid h-8 w-8 place-items-center rounded-md border border-slate-200 bg-white text-slate-500 hover:text-slate-950" type="button" onClick={() => setIsOpen(false)} aria-label="Close">
+                <X size={15} />
+              </button>
+            </div>
+
+            <div className="min-h-0 flex-1 overflow-y-auto p-2">
+              {courses.length === 0 ? (
+                <p className="px-3 py-6 text-center text-sm font-semibold text-slate-500">No courses</p>
+              ) : (
+                <div className="grid gap-1.5">
+                  {courses.map((course) => {
+                    const tone = reviewCourseTone(course.status || 'pending', course.completed);
+                    const stages = [
+                      { key: 'faculty', icon: UserRoundCheck, active: tone.step >= 1, current: tone.step === 1 && !course.completed && course.status !== 'mapped' },
+                      { key: 'moderator', icon: ShieldCheck, active: tone.step >= 2, current: tone.step === 2 && !course.completed && course.status !== 'mapped' },
+                      { key: 'approved', icon: CheckCircle2, active: tone.step >= 3, current: false },
+                    ];
+
+                    return (
+                      <div key={course.courseSubdocumentId || `${course.courseName}-${course.courseId}`} className="grid items-center gap-3 rounded-lg border border-slate-100 px-3 py-2 hover:bg-slate-50 md:grid-cols-[minmax(160px,1fr)_minmax(280px,1.6fr)_92px]">
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-semibold text-slate-950">{course.courseName}</p>
+                          <p className="truncate text-[11px] font-semibold text-slate-500">{course.courseId || '-'}</p>
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          {stages.map((stage, index) => {
+                            const Icon = stage.icon;
+                            return (
+                              <div className="flex flex-1 items-center gap-2" key={stage.key}>
+                                <span
+                                  className={`grid h-8 w-8 shrink-0 place-items-center rounded-full border transition ${
+                                    stage.active
+                                      ? `${tone.className} ${stage.current ? 'animate-pulse' : ''}`
+                                      : 'border-slate-200 bg-slate-50 text-slate-300'
+                                  }`}
+                                  title={stage.key}
+                                >
+                                  <Icon size={15} />
+                                </span>
+                                {index < stages.length - 1 ? (
+                                  <span className={`h-1 flex-1 rounded-full ${tone.step > index + 1 ? tone.bar : 'bg-slate-200'}`} />
+                                ) : null}
+                              </div>
+                            );
+                          })}
+                        </div>
+
+                        <span className={`justify-self-start rounded-full border px-2 py-0.5 text-[11px] font-bold md:justify-self-end ${tone.className}`}>
+                          {tone.label}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function getActionLabel(action, assessment) {
   const labels = {
     visibility: assessment?.visibility === 'hidden' ? 'Show assessment' : 'Hide assessment',
@@ -129,6 +303,7 @@ function getActionLabel(action, assessment) {
     reset: 'Reset all exam attempts',
     send_students: 'Send mail to students',
     send_proctors: 'Send mail to proctors',
+    publish_review: 'Publish assessment',
   };
 
   return labels[action] || 'Confirm action';
@@ -171,6 +346,10 @@ function getActionDescription(action, assessment) {
 
   if (action === 'send_proctors') {
     return 'Credential mail will be sent only to proctors who have not already received it. Already-sent records are skipped.';
+  }
+
+  if (action === 'publish_review') {
+    return 'This assessment is review-ready and will become visible for the next operational phase.';
   }
 
   return 'Please confirm before continuing.';
@@ -417,6 +596,13 @@ export function AssessmentOverviewPage({ mode = 'overview' }) {
 
       if (action === 'send_proctors') {
         await api.post(`/assessments/${assessment._id}/proctors/send-mail`);
+      }
+
+      if (action === 'publish_review') {
+        await api.patch(`/assessments/${assessment._id}`, {
+          status: 'pending',
+          visibility: 'visible',
+        });
       }
 
       setConfirmAction(null);
@@ -707,21 +893,27 @@ export function AssessmentOverviewPage({ mode = 'overview' }) {
                     </td>
                     {mode === 'review' ? (
                       <td className="min-w-[180px]">
-                        <div className="flex items-center justify-between text-xs font-semibold text-slate-600">
-                          <span>{Number(assessment.reviewSummary?.completed || 0)}/{Number(assessment.reviewSummary?.total || 0)} courses</span>
-                          <span className="text-brand-700">{reviewProgress(assessment)}%</span>
-                        </div>
-                        <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-200">
-                          <div className="h-full rounded-full bg-brand-500" style={{ width: `${reviewProgress(assessment)}%` }} />
-                        </div>
+                        <ReviewTimelinePopover assessment={assessment} />
                       </td>
                     ) : null}
                     <td>
                       {mode === 'review' ? (
-                        <Link className="primary-button h-9 px-3 text-xs" to={getReviewQuestionPath(location.pathname, assessment._id)}>
-                          <BookOpen size={14} />
-                          Edit Questions
-                        </Link>
+                        <div className="flex flex-wrap justify-end gap-2">
+                          {(assessment.reviewSummary?.readyToPublish || reviewProgress(assessment) === 100) ? (
+                            <button
+                              className="primary-button h-9 px-3 text-xs"
+                              type="button"
+                              onClick={() => setConfirmAction({ action: 'publish_review', assessment })}
+                            >
+                              <CheckCircle2 size={14} />
+                              Publish
+                            </button>
+                          ) : null}
+                          <Link className={`${assessment.reviewSummary?.readyToPublish || reviewProgress(assessment) === 100 ? 'secondary-button' : 'primary-button'} h-9 px-3 text-xs`} to={getReviewQuestionPath(location.pathname, assessment._id)}>
+                            <BookOpen size={14} />
+                            Edit Questions
+                          </Link>
+                        </div>
                       ) : (
                       <div className="relative flex justify-end">
                           <button

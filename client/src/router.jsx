@@ -51,6 +51,7 @@ const AssignedWorkPage = lazyPage(() => import('./features/work/AssignedWorkPage
 const WorkWorkspacePage = lazyPage(() => import('./features/work/AssignedWorkPage.jsx'), 'WorkWorkspacePage');
 const LandingPage = lazyPage(() => import('./features/landing/LandingPage.jsx'), 'LandingPage');
 const SettingsPage = lazyPage(() => import('./features/settings/SettingsPage.jsx'), 'SettingsPage');
+const EmailTemplatePage = lazyPage(() => import('./features/settings/EmailTemplatePage.jsx'), 'EmailTemplatePage');
 const ActivityLogPage = lazyPage(() => import('./features/activity/ActivityLogPage.jsx'), 'ActivityLogPage');
 
 function AssessmentBuilderRedirect({ step = 'basic' }) {
@@ -194,6 +195,10 @@ export const router = createBrowserRouter([
             path: 'settings',
             element: page(SettingsPage),
           },
+          {
+            path: 'settings/email-templates',
+            element: page(EmailTemplatePage),
+          },
         ],
       },
     ],
@@ -308,6 +313,10 @@ export const router = createBrowserRouter([
           {
             path: 'settings',
             element: page(SettingsPage),
+          },
+          {
+            path: 'settings/email-templates',
+            element: page(EmailTemplatePage),
           },
         ],
       },

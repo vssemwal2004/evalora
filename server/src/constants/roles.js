@@ -47,6 +47,8 @@ const ADMIN_PERMISSIONS = Object.freeze([
   'library.archive',
   'mail.send',
   'mail.logs.view',
+  'email.template.view',
+  'email.template.manage',
   'reports.view',
   'reports.export',
   'ufm.view',

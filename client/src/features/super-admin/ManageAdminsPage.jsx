@@ -31,6 +31,8 @@ const defaultPermissions = [
   'library.create',
   'library.edit',
   'mail.send',
+  'email.template.view',
+  'email.template.manage',
   'reports.view',
   'reports.export',
   'activity.faculty.view',
@@ -85,6 +87,8 @@ const permissionLabels = {
   'library.archive': 'Archive library questions',
   'mail.send': 'Send student, proctor, faculty, and moderator emails',
   'mail.logs.view': 'View email logs',
+  'email.template.view': 'View email templates',
+  'email.template.manage': 'Edit email template design and content',
   'reports.view': 'View reports',
   'reports.export': 'Export reports',
   'ufm.view': 'View UFM cases',
@@ -95,11 +99,36 @@ const permissionLabels = {
   'activity.moderator.view': 'View moderator activity',
 };
 
+const moduleLabels = {
+  dashboard: 'Dashboard',
+  assessment: 'Assessments',
+  course: 'Courses',
+  faculty: 'Faculty',
+  moderator: 'Moderators',
+  student: 'Students',
+  proctor: 'Proctors',
+  library: 'Question Library',
+  mail: 'Mail & Credentials',
+  email: 'Email Templates',
+  reports: 'Reports',
+  ufm: 'UFM',
+  settings: 'Settings',
+  audit: 'Audit Logs',
+  activity: 'Activity Logs',
+};
+
 function formatPermission(permission) {
   return permissionLabels[permission] || permission
     .split('.')
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(' / ');
+}
+
+function formatModuleName(moduleName) {
+  return moduleLabels[moduleName] || moduleName
+    .split(/[-_.]/)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
 }
 
 function groupPermissions(permissions) {
@@ -156,6 +185,10 @@ export function ManageAdminsPage({ mode = 'all' }) {
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState('');
   const [editAdminId, setEditAdminId] = useState('');
+  const [accessAdmin, setAccessAdmin] = useState(null);
+  const [accessDraft, setAccessDraft] = useState([]);
+  const [accessSearch, setAccessSearch] = useState('');
+  const [activeAccessModule, setActiveAccessModule] = useState('');
   const [openMenu, setOpenMenu] = useState(null);
   const [deleteAdmin, setDeleteAdmin] = useState(null);
   const [form, setForm] = useState({
@@ -168,11 +201,41 @@ export function ManageAdminsPage({ mode = 'all' }) {
     name: '',
     email: '',
     status: 'active',
-    permissions: [],
   });
 
   const selectedPermissionCount = useMemo(() => form.permissions.length, [form.permissions]);
-  const groupedPermissions = useMemo(() => groupPermissions(availablePermissions), [availablePermissions]);
+  const permissionOptions = useMemo(
+    () => (availablePermissions.length > 0 ? availablePermissions : defaultPermissions),
+    [availablePermissions]
+  );
+  const groupedPermissions = useMemo(() => groupPermissions(permissionOptions), [permissionOptions]);
+  const groupedPermissionEntries = useMemo(() => Object.entries(groupedPermissions), [groupedPermissions]);
+  const filteredAccessGroups = useMemo(() => {
+    const normalizedSearch = accessSearch.trim().toLowerCase();
+
+    if (!normalizedSearch) {
+      return groupedPermissions;
+    }
+
+    return Object.entries(groupedPermissions).reduce((groups, [moduleName, permissions]) => {
+      const moduleLabel = formatModuleName(moduleName).toLowerCase();
+      const matchingPermissions = permissions.filter((permission) => {
+        const label = formatPermission(permission).toLowerCase();
+        return permission.toLowerCase().includes(normalizedSearch)
+          || label.includes(normalizedSearch)
+          || moduleLabel.includes(normalizedSearch);
+      });
+
+      return matchingPermissions.length > 0
+        ? { ...groups, [moduleName]: matchingPermissions }
+        : groups;
+    }, {});
+  }, [accessSearch, groupedPermissions]);
+  const accessModuleEntries = useMemo(() => Object.entries(filteredAccessGroups), [filteredAccessGroups]);
+  const currentAccessModule = filteredAccessGroups[activeAccessModule]
+    ? activeAccessModule
+    : accessModuleEntries[0]?.[0] || '';
+  const currentAccessPermissions = currentAccessModule ? filteredAccessGroups[currentAccessModule] || [] : [];
   const showCreate = mode === 'all' || mode === 'create';
   const showList = mode === 'all' || mode === 'list';
   const headerCopy = {
@@ -250,39 +313,28 @@ export function ManageAdminsPage({ mode = 'all' }) {
     });
   }
 
-  function toggleEditPermission(permission) {
-    setEditForm((current) => ({
-      ...current,
-      permissions: current.permissions.includes(permission)
-        ? current.permissions.filter((item) => item !== permission)
-        : [...current.permissions, permission],
-    }));
+  function toggleAccessPermission(permission) {
+    setAccessDraft((current) =>
+      current.includes(permission)
+        ? current.filter((item) => item !== permission)
+        : [...current, permission]
+    );
   }
 
-  function selectAllEditPermissions() {
-    setEditForm((current) => ({
-      ...current,
-      permissions: [...availablePermissions],
-    }));
+  function selectAllAccessPermissions() {
+    setAccessDraft([...permissionOptions]);
   }
 
-  function clearAllEditPermissions() {
-    setEditForm((current) => ({
-      ...current,
-      permissions: [],
-    }));
+  function clearAllAccessPermissions() {
+    setAccessDraft([]);
   }
 
-  function toggleEditModulePermissions(modulePermissions) {
-    setEditForm((current) => {
-      const hasAll = modulePermissions.every((permission) => current.permissions.includes(permission));
-
-      return {
-        ...current,
-        permissions: hasAll
-          ? current.permissions.filter((permission) => !modulePermissions.includes(permission))
-          : mergeUniquePermissions(current.permissions, modulePermissions),
-      };
+  function toggleAccessModulePermissions(modulePermissions) {
+    setAccessDraft((current) => {
+      const hasAll = modulePermissions.every((permission) => current.includes(permission));
+      return hasAll
+        ? current.filter((permission) => !modulePermissions.includes(permission))
+        : mergeUniquePermissions(current, modulePermissions);
     });
   }
 
@@ -292,7 +344,6 @@ export function ManageAdminsPage({ mode = 'all' }) {
       name: admin.name || '',
       email: admin.email || '',
       status: admin.status || 'active',
-      permissions: admin.permissions || [],
     });
   }
 
@@ -302,8 +353,21 @@ export function ManageAdminsPage({ mode = 'all' }) {
       name: '',
       email: '',
       status: 'active',
-      permissions: [],
     });
+  }
+
+  function openAccessManager(admin) {
+    setAccessAdmin(admin);
+    setAccessDraft(admin.permissions || []);
+    setAccessSearch('');
+    setActiveAccessModule((admin.permissions?.[0] || permissionOptions[0] || '').split('.')[0] || '');
+  }
+
+  function closeAccessManager() {
+    setAccessAdmin(null);
+    setAccessDraft([]);
+    setAccessSearch('');
+    setActiveAccessModule('');
   }
 
   async function handleCreateAdmin(event) {
@@ -374,11 +438,36 @@ export function ManageAdminsPage({ mode = 'all' }) {
     setError('');
 
     try {
-      await api.patch(`/super-admin/admins/${editAdminId}`, editForm);
+      await api.patch(`/super-admin/admins/${editAdminId}`, {
+        name: editForm.name,
+        email: editForm.email,
+        status: editForm.status,
+      });
       cancelEditing();
       await loadAdmins();
     } catch (requestError) {
       setError(requestError.response?.data?.message || 'Unable to update admin.');
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  async function handleAccessSubmit(event) {
+    event.preventDefault();
+
+    if (!accessAdmin) return;
+
+    setIsSaving(true);
+    setError('');
+
+    try {
+      await api.patch(`/super-admin/admins/${accessAdmin._id}/permissions`, {
+        permissions: accessDraft,
+      });
+      closeAccessManager();
+      await loadAdmins();
+    } catch (requestError) {
+      setError(requestError.response?.data?.message || 'Unable to update admin access.');
     } finally {
       setIsSaving(false);
     }
@@ -454,7 +543,7 @@ export function ManageAdminsPage({ mode = 'all' }) {
                 </div>
               </div>
               <div className="max-h-[360px] space-y-3 overflow-auto rounded-md border border-slate-200 bg-slate-50 p-3">
-                {Object.entries(groupedPermissions).map(([moduleName, permissions]) => (
+                {groupedPermissionEntries.map(([moduleName, permissions]) => (
                   <div className="rounded-md border border-slate-200 bg-white p-2" key={moduleName}>
                     <div className="flex items-center justify-between gap-2 px-1 pb-2">
                       <p className="text-xs font-semibold uppercase text-slate-500">{moduleName}</p>
@@ -502,8 +591,8 @@ export function ManageAdminsPage({ mode = 'all' }) {
               <form className="space-y-4" onSubmit={handleEditAdminSubmit}>
                 <div className="flex items-center justify-between gap-3">
                   <div>
-                    <p className="text-sm font-semibold text-slate-950">Edit Admin Access</p>
-                    <p className="mt-1 text-xs text-slate-500">Update admin identity, status, and module permissions from one place.</p>
+                    <p className="text-sm font-semibold text-slate-950">Edit Admin Details</p>
+                    <p className="mt-1 text-xs text-slate-500">Update identity and account status. Use Manage Access for permissions.</p>
                   </div>
                   <button className="secondary-button h-9 px-3 text-xs" type="button" onClick={cancelEditing} disabled={isSaving}>
                     <X size={14} />
@@ -556,60 +645,13 @@ export function ManageAdminsPage({ mode = 'all' }) {
                   </div>
                 </div>
 
-                <div>
-                  <div className="mb-2 flex items-center justify-between gap-3">
-                    <label className="field-label">Permissions</label>
-                    <div className="flex items-center gap-2">
-                      <button className="secondary-button h-8 px-2 text-xs" type="button" onClick={selectAllEditPermissions}>
-                        Select all
-                      </button>
-                      <button className="secondary-button h-8 px-2 text-xs" type="button" onClick={clearAllEditPermissions}>
-                        Clear
-                      </button>
-                      <span className="text-xs font-semibold text-brand-600">{editForm.permissions.length} selected</span>
-                    </div>
-                  </div>
-                  <div className="max-h-[320px] space-y-3 overflow-auto rounded-md border border-slate-200 bg-white p-3">
-                    {Object.entries(groupedPermissions).map(([moduleName, permissions]) => (
-                      <div className="rounded-md border border-slate-200 bg-slate-50 p-2" key={moduleName}>
-                        <div className="flex items-center justify-between gap-2 px-1 pb-2">
-                          <p className="text-xs font-semibold uppercase text-slate-500">{moduleName}</p>
-                          <button className="secondary-button h-7 px-2 text-[11px]" type="button" onClick={() => toggleEditModulePermissions(permissions)}>
-                            {permissions.every((permission) => editForm.permissions.includes(permission)) ? 'Clear module' : 'Select module'}
-                          </button>
-                        </div>
-                        <div className="space-y-1">
-                          {permissions.map((permission) => {
-                            const checked = editForm.permissions.includes(permission);
-                            return (
-                              <button
-                                key={permission}
-                                type="button"
-                                onClick={() => toggleEditPermission(permission)}
-                                className={`flex w-full items-center justify-between rounded-md border px-3 py-2 text-left text-xs font-semibold transition ${
-                                  checked
-                                    ? 'border-brand-300 bg-brand-50 text-brand-700'
-                                    : 'border-slate-200 bg-white text-slate-600 hover:border-brand-200 hover:text-slate-900'
-                                }`}
-                              >
-                                {formatPermission(permission)}
-                                {checked ? <Check size={14} /> : null}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
                 <div className="flex justify-end gap-2">
                   <button className="secondary-button" type="button" onClick={cancelEditing} disabled={isSaving}>
                     Cancel
                   </button>
                   <button className="primary-button" type="submit" disabled={isSaving}>
                     <ShieldCheck size={16} />
-                    {isSaving ? 'Saving access' : 'Save changes'}
+                    {isSaving ? 'Saving admin' : 'Save details'}
                   </button>
                 </div>
               </form>
@@ -671,7 +713,11 @@ export function ManageAdminsPage({ mode = 'all' }) {
                           {admin.status}
                         </span>
                       </td>
-                      <td className="text-slate-600">{admin.permissions.length}</td>
+                      <td className="text-slate-600">
+                        <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-bold text-slate-700">
+                          {admin.permissions.length} rule(s)
+                        </span>
+                      </td>
                       <td className="text-slate-500">
                         {admin.lastLoginAt ? new Date(admin.lastLoginAt).toLocaleString() : 'Never'}
                       </td>
@@ -690,6 +736,184 @@ export function ManageAdminsPage({ mode = 'all' }) {
         ) : null}
       </div>
 
+      {accessAdmin ? (
+        <div className="fixed inset-0 z-50 bg-slate-950/40 p-3 sm:p-5">
+          <button className="absolute inset-0 cursor-default" type="button" aria-label="Close manage access" onClick={closeAccessManager} />
+          <form
+            className="relative ml-auto flex h-full w-full max-w-6xl flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-2xl"
+            onSubmit={handleAccessSubmit}
+          >
+            <div className="flex flex-wrap items-start justify-between gap-4 border-b border-slate-200 bg-slate-50 px-5 py-4">
+              <div className="flex min-w-0 items-start gap-3">
+                <span className="grid h-11 w-11 shrink-0 place-items-center rounded-md border border-brand-100 bg-brand-50 text-brand-600">
+                  <ShieldCheck size={19} />
+                </span>
+                <div className="min-w-0">
+                  <p className="field-label text-brand-600">Manage Access</p>
+                  <h2 className="truncate text-lg font-semibold text-slate-950">{accessAdmin.name}</h2>
+                  <p className="mt-1 truncate text-sm text-slate-500">{accessAdmin.email}</p>
+                </div>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="rounded-full border border-brand-100 bg-brand-50 px-3 py-1 text-xs font-bold text-brand-700">
+                  {accessDraft.length} selected
+                </span>
+                <button className="secondary-button h-9 px-3 text-xs" type="button" onClick={selectAllAccessPermissions}>
+                  Select all
+                </button>
+                <button className="secondary-button h-9 px-3 text-xs" type="button" onClick={clearAllAccessPermissions}>
+                  Clear
+                </button>
+                <button className="secondary-button h-9 px-3 text-xs" type="button" onClick={closeAccessManager} disabled={isSaving}>
+                  <X size={14} />
+                  Close
+                </button>
+              </div>
+            </div>
+
+            <div className="grid gap-0 border-b border-slate-200 md:grid-cols-[260px_1fr]">
+              <div className="border-b border-slate-200 bg-white p-4 md:border-b-0 md:border-r">
+                <p className="text-xs font-bold uppercase text-slate-500">Admin Profile</p>
+                <div className="mt-3 grid gap-2 text-sm">
+                  <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+                    <p className="text-[11px] font-bold uppercase text-slate-400">Status</p>
+                    <span className={statusClass(accessAdmin.status)}>{accessAdmin.status}</span>
+                  </div>
+                  <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+                    <p className="text-[11px] font-bold uppercase text-slate-400">Last Login</p>
+                    <p className="mt-1 text-xs font-semibold text-slate-700">
+                      {accessAdmin.lastLoginAt ? new Date(accessAdmin.lastLoginAt).toLocaleString() : 'Never'}
+                    </p>
+                  </div>
+                </div>
+              </div>
+              <div className="p-4">
+                <label className="field-label" htmlFor="access-search">Search permissions</label>
+                <div className="search-field mt-2">
+                  <Search size={16} className="text-brand-500" />
+                  <input
+                    id="access-search"
+                    className="h-10 flex-1 border-0 px-2 text-sm outline-none"
+                    placeholder="Search module, permission, or feature"
+                    value={accessSearch}
+                    onChange={(event) => setAccessSearch(event.target.value)}
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="grid min-h-0 flex-1 md:grid-cols-[260px_1fr]">
+              <aside className="min-h-0 overflow-y-auto border-b border-slate-200 bg-slate-50 p-3 md:border-b-0 md:border-r">
+                <div className="space-y-1">
+                  {accessModuleEntries.length === 0 ? (
+                    <p className="px-2 py-6 text-center text-xs font-semibold text-slate-500">No permissions match the search.</p>
+                  ) : (
+                    accessModuleEntries.map(([moduleName, permissions]) => {
+                      const modulePermissions = groupedPermissions[moduleName] || permissions;
+                      const selectedInModule = modulePermissions.filter((permission) => accessDraft.includes(permission)).length;
+                      const active = moduleName === currentAccessModule;
+
+                      return (
+                        <button
+                          key={moduleName}
+                          type="button"
+                          onClick={() => setActiveAccessModule(moduleName)}
+                          className={`flex w-full items-center justify-between gap-3 rounded-md border px-3 py-2.5 text-left transition ${
+                            active
+                              ? 'border-brand-200 bg-white text-slate-950 shadow-sm'
+                              : 'border-transparent text-slate-600 hover:border-slate-200 hover:bg-white hover:text-slate-950'
+                          }`}
+                        >
+                          <span className="min-w-0">
+                            <span className="block truncate text-sm font-bold">{formatModuleName(moduleName)}</span>
+                            <span className="mt-0.5 block text-[11px] font-semibold text-slate-500">{permissions.length} visible rule(s)</span>
+                          </span>
+                          <span className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${
+                            selectedInModule === modulePermissions.length && modulePermissions.length > 0
+                              ? 'bg-emerald-50 text-emerald-700'
+                              : 'bg-slate-100 text-slate-500'
+                          }`}>
+                            {selectedInModule}/{modulePermissions.length}
+                          </span>
+                        </button>
+                      );
+                    })
+                  )}
+                </div>
+              </aside>
+
+              <section className="min-h-0 overflow-y-auto bg-white">
+                {currentAccessModule ? (
+                  <div className="p-5">
+                    <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <p className="field-label text-brand-600">{formatModuleName(currentAccessModule)}</p>
+                        <h3 className="text-base font-semibold text-slate-950">Access rights</h3>
+                        <p className="mt-1 text-sm text-slate-500">Select only the actions this admin should control.</p>
+                      </div>
+                      <button
+                        className="secondary-button h-9 px-3 text-xs"
+                        type="button"
+                        onClick={() => toggleAccessModulePermissions(groupedPermissions[currentAccessModule] || currentAccessPermissions)}
+                      >
+                        {(groupedPermissions[currentAccessModule] || currentAccessPermissions).every((permission) => accessDraft.includes(permission))
+                          ? 'Clear module'
+                          : 'Select module'}
+                      </button>
+                    </div>
+
+                    <div className="grid gap-2 lg:grid-cols-2">
+                      {currentAccessPermissions.map((permission) => {
+                        const checked = accessDraft.includes(permission);
+                        return (
+                          <button
+                            key={permission}
+                            type="button"
+                            onClick={() => toggleAccessPermission(permission)}
+                            className={`flex min-h-[58px] items-center justify-between gap-3 rounded-md border px-3 py-2.5 text-left transition ${
+                              checked
+                                ? 'border-brand-300 bg-brand-50 text-brand-700 shadow-sm'
+                                : 'border-slate-200 bg-white text-slate-600 hover:border-brand-200 hover:text-slate-950'
+                            }`}
+                          >
+                            <span className="min-w-0">
+                              <span className="block text-sm font-bold">{formatPermission(permission)}</span>
+                              <span className="mt-0.5 block truncate text-[11px] font-semibold text-slate-400">{permission}</span>
+                            </span>
+                            <span className={`grid h-6 w-6 shrink-0 place-items-center rounded-full border ${
+                              checked ? 'border-brand-300 bg-brand-500 text-white' : 'border-slate-300 bg-white text-transparent'
+                            }`}>
+                              <Check size={13} />
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ) : (
+                  <EmptyState title="No permissions available" description="Permission options will appear here after the admin access list loads." />
+                )}
+              </section>
+            </div>
+
+            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 bg-slate-50 px-5 py-4">
+              <p className="text-xs font-semibold text-slate-500">
+                Changes apply immediately after saving and are recorded in activity logs.
+              </p>
+              <div className="flex items-center gap-2">
+                <button className="secondary-button" type="button" onClick={closeAccessManager} disabled={isSaving}>
+                  Cancel
+                </button>
+                <button className="primary-button" type="submit" disabled={isSaving}>
+                  <ShieldCheck size={16} />
+                  {isSaving ? 'Saving access' : 'Save access'}
+                </button>
+              </div>
+            </div>
+          </form>
+        </div>
+      ) : null}
+
       {openMenu ? (
         <>
           <button className="fixed inset-0 z-40 cursor-default bg-transparent" type="button" aria-label="Close actions" onClick={closeActionMenu} />
@@ -698,7 +922,10 @@ export function ManageAdminsPage({ mode = 'all' }) {
             style={{ top: openMenu.top, left: openMenu.left, width: 196 }}
           >
             <button className="flex w-full items-center gap-2 rounded px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50" type="button" onClick={() => { startEditing(openMenu.admin); closeActionMenu(); }}>
-              <Pencil size={14} /> Edit
+              <Pencil size={14} /> Edit details
+            </button>
+            <button className="flex w-full items-center gap-2 rounded px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50" type="button" onClick={() => { openAccessManager(openMenu.admin); closeActionMenu(); }}>
+              <ShieldCheck size={14} /> Manage access
             </button>
             <button className="flex w-full items-center gap-2 rounded px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50" type="button" onClick={() => { updateStatus(openMenu.admin, openMenu.admin.status === 'active' ? 'inactive' : 'active'); closeActionMenu(); }}>
               <UserX size={14} /> {openMenu.admin.status === 'active' ? 'Disable' : 'Activate'}

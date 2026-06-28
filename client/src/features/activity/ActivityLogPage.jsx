@@ -153,6 +153,11 @@ function activitySummary(log) {
       detail: compactList([next.name, next.email]) || 'Student mail was sent.',
       category: 'Mail',
     },
+    'assessment.student.bulk_send_mail': {
+      title: 'Sent student credential mails',
+      detail: `${pluralCount(next.sent || 0, 'mail')} sent, ${pluralCount(next.skipped || 0, 'recipient')} skipped, ${pluralCount(next.failed || 0, 'failure')}.`,
+      category: 'Mail',
+    },
     'assessment.proctor.add': {
       title: 'Added proctor',
       detail: compactList([next.name, next.email, next.assessmentTitle]),
@@ -167,6 +172,21 @@ function activitySummary(log) {
       title: 'Sent proctor credential mail',
       detail: compactList([next.name, next.email]) || 'Proctor mail was sent.',
       category: 'Mail',
+    },
+    'assessment.proctor.bulk_send_mail': {
+      title: 'Sent proctor credential mails',
+      detail: `${pluralCount(next.sent || 0, 'mail')} sent, ${pluralCount(next.skipped || 0, 'recipient')} skipped, ${pluralCount(next.failed || 0, 'failure')}.`,
+      category: 'Mail',
+    },
+    'email.template.update': {
+      title: 'Updated email template',
+      detail: compactList([next.name, next.subject, next.status && `status ${next.status}`]) || 'Email template content was updated.',
+      category: 'Email Templates',
+    },
+    'email.template.reset': {
+      title: 'Reset email template',
+      detail: compactList([next.name, next.key]) || 'Email template was reset to the default design.',
+      category: 'Email Templates',
     },
     'course.create': {
       title: 'Created course',

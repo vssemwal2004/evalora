@@ -11,6 +11,7 @@ import {
   LayoutDashboard,
   ListChecks,
   LogOut,
+  Mail,
   NotebookTabs,
   Plus,
   Shield,
@@ -105,6 +106,7 @@ const navByRole = {
         icon: SettingsIcon,
         children: [
           { label: 'Account Settings', to: '/super-admin/settings', icon: SettingsIcon },
+          { label: 'Email Templates', to: '/super-admin/settings/email-templates', icon: Mail },
         ],
       },
     ],
@@ -187,6 +189,7 @@ const navByRole = {
         icon: SettingsIcon,
         children: [
           { label: 'Account Settings', to: '/admin/settings', icon: SettingsIcon },
+          { label: 'Email Templates', to: '/admin/settings/email-templates', icon: Mail, anyPermissions: ['email.template.view', 'email.template.manage'] },
         ],
       },
     ],
@@ -306,36 +309,36 @@ function SidebarSection({ section, isOpen, onToggle, sidebarOpen }) {
   const expanded = sidebarOpen && (isOpen || isSectionActive);
 
   return (
-    <div className="space-y-1">
+    <div className="space-y-0.5">
       <button
-        className={`group relative flex h-10 w-full items-center overflow-hidden rounded-xl border text-[12px] font-semibold transition-all duration-200 ease-out ${
+        className={`group relative flex h-9 w-full items-center overflow-hidden rounded-lg border text-[11px] font-semibold transition-all duration-200 ease-out ${
           sidebarOpen ? 'justify-between px-2' : 'justify-center px-0'
         } ${
           expanded || isSectionActive
-            ? 'border-brand-100 bg-brand-50/90 text-brand-700 shadow-[0_8px_22px_rgba(249,115,22,0.12)]'
-            : 'border-transparent text-slate-600 hover:border-slate-200 hover:bg-slate-50 hover:text-slate-950'
+            ? 'border-brand-100 bg-white text-brand-700 shadow-[0_7px_18px_rgba(249,115,22,0.13)]'
+            : 'border-transparent text-slate-600 hover:border-orange-100 hover:bg-white/80 hover:text-slate-950'
         }`}
         type="button"
         onClick={onToggle}
         title={section.label}
         aria-expanded={expanded}
       >
-        {(expanded || isSectionActive) ? <span className="absolute left-0 top-2 h-6 w-1 rounded-r-full bg-brand-500" /> : null}
+        {(expanded || isSectionActive) ? <span className="absolute left-0 top-2 h-5 w-1 rounded-r-full bg-brand-500" /> : null}
         <span className={`flex min-w-0 items-center ${sidebarOpen ? 'gap-2' : 'justify-center'}`}>
-          <span className={`grid h-7 w-7 shrink-0 place-items-center rounded-lg transition-all duration-200 ${
-            expanded || isSectionActive ? 'bg-white text-brand-600 shadow-sm' : 'bg-slate-100 text-slate-500 group-hover:bg-white group-hover:text-brand-600'
+          <span className={`grid h-6 w-6 shrink-0 place-items-center rounded-md transition-all duration-200 ${
+            expanded || isSectionActive ? 'bg-brand-50 text-brand-600' : 'bg-slate-100 text-slate-500 group-hover:bg-brand-50 group-hover:text-brand-600'
           }`}>
-            <section.icon size={15} />
+            <section.icon size={14} />
           </span>
-          <span className={`overflow-hidden truncate whitespace-nowrap transition-all duration-200 ${sidebarOpen ? 'max-w-[142px] opacity-100' : 'max-w-0 opacity-0'}`}>
+          <span className={`overflow-hidden truncate whitespace-nowrap transition-all duration-200 ${sidebarOpen ? 'max-w-[150px] opacity-100' : 'max-w-0 opacity-0'}`}>
             {section.label}
           </span>
         </span>
-        {sidebarOpen ? <ChevronDown size={13} className={`shrink-0 text-slate-400 transition-transform duration-200 ${expanded ? 'rotate-180 text-brand-500' : ''}`} /> : null}
+        {sidebarOpen ? <ChevronDown size={12} className={`shrink-0 text-slate-400 transition-transform duration-200 ${expanded ? 'rotate-180 text-brand-500' : ''}`} /> : null}
       </button>
 
       <div
-        className={`ml-3 overflow-hidden border-l border-slate-200 pl-2.5 transition-all duration-300 ease-out ${
+        className={`ml-3 overflow-hidden border-l border-orange-100 pl-2 transition-all duration-300 ease-out ${
           expanded ? 'max-h-72 translate-x-0 opacity-100' : 'max-h-0 -translate-x-1 opacity-0'
         }`}
       >
@@ -346,14 +349,14 @@ function SidebarSection({ section, isOpen, onToggle, sidebarOpen }) {
               to={item.to}
               end
               className={({ isActive }) =>
-                `flex h-8 items-center gap-2 rounded-lg px-2 text-[12px] font-semibold transition-all duration-200 ease-out ${
+                `flex h-7 items-center gap-2 rounded-md px-2 text-[11px] font-semibold transition-all duration-200 ease-out ${
                   isActive
                     ? 'border border-brand-100 bg-white text-brand-700 shadow-sm'
-                    : 'border border-transparent text-slate-500 hover:translate-x-0.5 hover:bg-white hover:text-slate-900'
+                    : 'border border-transparent text-slate-500 hover:translate-x-0.5 hover:bg-white/90 hover:text-slate-900'
                 }`
               }
             >
-              <item.icon size={13} className="shrink-0 text-brand-500" />
+              <item.icon size={12} className="shrink-0 text-brand-500" />
               <span className="truncate">{item.label}</span>
             </NavLink>
           ))}
@@ -423,50 +426,50 @@ export function AppShell({ role }) {
   return (
     <div className={`ops-shell ops-shell-${role} min-h-screen bg-[#f6f7f9]`}>
       <aside
-        className={`fixed inset-y-0 left-0 z-30 hidden overflow-hidden border-r border-slate-200 bg-white/95 shadow-[10px_0_34px_rgba(15,23,42,0.08)] backdrop-blur-xl transition-all duration-300 ease-out lg:block ${
-          isSidebarHovered ? 'w-[226px]' : 'w-[68px]'
+        className={`fixed inset-y-0 left-0 z-30 hidden flex-col overflow-hidden border-r border-orange-100/80 bg-[linear-gradient(180deg,#ffffff_0%,#fff7ed_46%,#f8fafc_100%)] shadow-[10px_0_34px_rgba(15,23,42,0.08)] backdrop-blur-xl transition-all duration-300 ease-out lg:flex ${
+          isSidebarHovered ? 'w-[232px]' : 'w-[68px]'
         }`}
         onMouseEnter={() => setIsSidebarHovered(true)}
         onMouseLeave={() => setIsSidebarHovered(false)}
       >
-        <div className={`flex items-center border-b border-slate-200 transition-all duration-300 ${isSidebarHovered ? 'h-16 justify-start px-4' : 'h-16 justify-center px-2'}`}>
+        <div className={`shrink-0 flex items-center border-b border-orange-100/80 transition-all duration-300 ${isSidebarHovered ? 'h-14 justify-start px-4' : 'h-14 justify-center px-2'}`}>
           <img
             src="/logo.webp"
             alt="Evalora"
-            className={`object-contain transition-all duration-300 ${isSidebarHovered ? 'h-10 w-32 object-left' : 'h-9 w-10 object-center'}`}
+            className={`object-contain transition-all duration-300 ${isSidebarHovered ? 'h-9 w-32 object-left' : 'h-8 w-10 object-center'}`}
           />
         </div>
 
-        <div className={`overflow-hidden border-b border-slate-100 transition-all duration-300 ${isSidebarHovered ? 'max-h-16 px-3 py-2.5 opacity-100' : 'max-h-0 px-3 py-0 opacity-0'}`}>
-          <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+        <div className={`shrink-0 overflow-hidden border-b border-orange-100/70 transition-all duration-300 ${isSidebarHovered ? 'max-h-14 px-3 py-2 opacity-100' : 'max-h-0 px-3 py-0 opacity-0'}`}>
+          <div className="rounded-lg border border-orange-100 bg-white/75 px-3 py-1.5 shadow-sm">
             <p className="text-[9px] font-bold uppercase text-slate-400">Workspace</p>
             <p className="mt-0.5 truncate text-[12px] font-bold text-slate-800">{roleTitles[role]}</p>
           </div>
         </div>
 
-        <nav className={`max-h-[calc(100vh-150px)] space-y-1 overflow-y-auto py-3 transition-all duration-300 ${isSidebarHovered ? 'px-2.5' : 'px-2'}`}>
+        <nav className={`app-sidebar-scroll min-h-0 flex-1 space-y-0.5 overflow-y-auto py-2 transition-all duration-300 ${isSidebarHovered ? 'px-2.5' : 'px-2'}`}>
           <NavLink
             to={navConfig.dashboard}
             end
             className={({ isActive }) =>
-              `group relative flex h-10 items-center overflow-hidden rounded-xl border text-[12px] font-semibold transition-all duration-200 ease-out ${
+              `group relative flex h-9 items-center overflow-hidden rounded-lg border text-[11px] font-semibold transition-all duration-200 ease-out ${
                 isSidebarHovered ? 'justify-start gap-2 px-2' : 'justify-center px-0'
               } ${
                 isActive
-                  ? 'border-brand-100 bg-brand-50/90 text-brand-700 shadow-[0_8px_22px_rgba(249,115,22,0.12)]'
-                  : 'border-transparent text-slate-600 hover:border-slate-200 hover:bg-slate-50 hover:text-slate-950'
+                  ? 'border-brand-100 bg-white text-brand-700 shadow-[0_7px_18px_rgba(249,115,22,0.13)]'
+                  : 'border-transparent text-slate-600 hover:border-orange-100 hover:bg-white/80 hover:text-slate-950'
               }`
             }
           >
             {({ isActive }) => (
               <>
-                {isActive ? <span className="absolute left-0 top-2 h-6 w-1 rounded-r-full bg-brand-500" /> : null}
-                <span className={`grid h-7 w-7 shrink-0 place-items-center rounded-lg transition-all duration-200 ${
-                  isActive ? 'bg-white text-brand-600 shadow-sm' : 'bg-slate-100 text-slate-500 group-hover:bg-white group-hover:text-brand-600'
+                {isActive ? <span className="absolute left-0 top-2 h-5 w-1 rounded-r-full bg-brand-500" /> : null}
+                <span className={`grid h-6 w-6 shrink-0 place-items-center rounded-md transition-all duration-200 ${
+                  isActive ? 'bg-brand-50 text-brand-600' : 'bg-slate-100 text-slate-500 group-hover:bg-brand-50 group-hover:text-brand-600'
                 }`}>
-                  <LayoutDashboard size={15} />
+                  <LayoutDashboard size={14} />
                 </span>
-                <span className={`overflow-hidden truncate whitespace-nowrap transition-all duration-200 ${isSidebarHovered ? 'max-w-[142px] opacity-100' : 'max-w-0 opacity-0'}`}>
+                <span className={`overflow-hidden truncate whitespace-nowrap transition-all duration-200 ${isSidebarHovered ? 'max-w-[150px] opacity-100' : 'max-w-0 opacity-0'}`}>
                   Dashboard
                 </span>
               </>
@@ -484,8 +487,8 @@ export function AppShell({ role }) {
           ))}
         </nav>
 
-        <div className={`absolute inset-x-0 bottom-0 border-t border-slate-200 bg-white/95 p-2 transition-all duration-300 ${isSidebarHovered ? 'opacity-100' : 'opacity-100'}`}>
-          <div className={`flex items-center rounded-xl border border-slate-200 bg-slate-50 transition-all duration-300 ${isSidebarHovered ? 'gap-2 px-2.5 py-2' : 'justify-center px-1 py-2'}`}>
+        <div className="shrink-0 border-t border-orange-100/80 bg-white/75 p-2 transition-all duration-300">
+          <div className={`flex items-center rounded-lg border border-orange-100 bg-white/85 shadow-sm transition-all duration-300 ${isSidebarHovered ? 'gap-2 px-2.5 py-2' : 'justify-center px-1 py-2'}`}>
             <div className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-brand-500 text-xs font-bold text-white shadow-sm">
               {(user?.name || roleTitles[role] || 'E').charAt(0).toUpperCase()}
             </div>

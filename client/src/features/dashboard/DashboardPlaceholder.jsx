@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Activity, AlertTriangle, ClipboardList, Mail, ShieldAlert, UserCog, Users, Video } from 'lucide-react';
+import { Activity, ClipboardList, FileText, Mail, ShieldAlert, ShieldCheck, UserCog, UserRoundCog, Users, Video } from 'lucide-react';
 import { api } from '../../lib/api';
 import { EmptyState, MetricCard, PageHeader, SectionPanel } from '../../ui/Surface.jsx';
 
@@ -34,13 +34,32 @@ export function DashboardPlaceholder({ title }) {
   const metrics = [
     { label: 'Admins', value: counts.admins ?? '-', icon: UserCog },
     { label: 'Assessments', value: counts.assessments ?? 0, icon: ClipboardList },
+    { label: 'Published', value: counts.publishedAssessments ?? 0, icon: ShieldCheck },
+    { label: 'In Review', value: counts.reviewAssessments ?? 0, icon: FileText },
     { label: 'Students', value: counts.students ?? 0, icon: Users },
+    { label: 'Faculty', value: counts.faculty ?? 0, icon: UserRoundCog },
+    { label: 'Moderators', value: counts.moderators ?? 0, icon: ShieldAlert },
     { label: 'Proctors', value: counts.proctors ?? 0, icon: Video },
-    { label: 'Active exams', value: counts.activeAssessments ?? 0, icon: Activity },
     { label: 'Pending mails', value: counts.pendingMails ?? 0, icon: Mail },
+    { label: 'Email templates', value: counts.emailTemplates ?? 0, icon: Mail },
     { label: 'UFM cases', value: counts.ufmCases ?? 0, icon: ShieldAlert },
-    { label: 'Open alerts', value: 0, icon: AlertTriangle },
   ];
+
+  function formatAction(action) {
+    const labels = {
+      'assessment.create': 'Created assessment',
+      'assessment.update': 'Edited assessment',
+      'assessment.status.update': 'Changed assessment status',
+      'assessment.student.bulk_send_mail': 'Sent student mails',
+      'assessment.proctor.bulk_send_mail': 'Sent proctor mails',
+      'email.template.update': 'Updated email template',
+      'email.template.reset': 'Reset email template',
+      'work.submit': 'Faculty submitted questions',
+      'work.approve': 'Moderator approved work',
+      'work.reject': 'Moderator rejected work',
+    };
+    return labels[action] || String(action || '').replace(/\./g, ' ');
+  }
 
   return (
     <section className="space-y-5">
@@ -83,9 +102,9 @@ export function DashboardPlaceholder({ title }) {
               ) : (
                 summary.recentActivity.map((item) => (
                   <tr key={item._id}>
-                    <td className="font-medium text-slate-900">{item.action}</td>
+                    <td className="font-medium text-slate-900">{formatAction(item.action)}</td>
                     <td className="text-slate-600">{item.targetType}</td>
-                    <td className="text-slate-600">{item.actorRole}</td>
+                    <td className="text-slate-600">{item.actorName || item.actorRole}</td>
                     <td className="text-slate-500">{new Date(item.createdAt).toLocaleString()}</td>
                   </tr>
                 ))

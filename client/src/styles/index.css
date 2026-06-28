@@ -35,6 +35,28 @@ textarea {
       radial-gradient(circle at 50% 60%, rgba(15, 23, 42, 0.035), transparent 70%);
   }
 
+  .app-sidebar-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(249, 115, 22, 0.34) transparent;
+  }
+
+  .app-sidebar-scroll::-webkit-scrollbar {
+    width: 6px;
+  }
+
+  .app-sidebar-scroll::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .app-sidebar-scroll::-webkit-scrollbar-thumb {
+    border-radius: 999px;
+    background: rgba(249, 115, 22, 0.28);
+  }
+
+  .app-sidebar-scroll:hover::-webkit-scrollbar-thumb {
+    background: rgba(249, 115, 22, 0.44);
+  }
+
   .brand-loader-mark {
     position: relative;
     display: flex;

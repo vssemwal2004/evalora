@@ -1,6 +1,9 @@
 const express = require('express');
 const Assessment = require('../models/Assessment');
+const AssessmentProctor = require('../models/AssessmentProctor');
+const AssessmentStudent = require('../models/AssessmentStudent');
 const AuditLog = require('../models/AuditLog');
+const EmailTemplate = require('../models/EmailTemplate');
 const User = require('../models/User');
 const { ROLES } = require('../constants/roles');
 const { authenticate } = require('../middleware/auth');
@@ -12,27 +15,39 @@ router.use(authenticate);
 router.get('/summary', async (req, res, next) => {
   try {
     const assessmentScope = req.user.role === ROLES.SUPER_ADMIN ? {} : { ownerAdminId: req.user._id };
-    const [admins, students, proctors, assessments, activeAssessments, recentActivity] = await Promise.all([
+    const userScope = req.user.role === ROLES.SUPER_ADMIN ? {} : { ownerAdminId: req.user._id };
+    const [admins, faculty, moderators, students, proctors, assessments, reviewAssessments, publishedAssessments, pendingStudentMails, pendingProctorMails, emailTemplates, recentActivity] = await Promise.all([
       User.countDocuments({ role: ROLES.ADMIN }),
-      User.countDocuments({ role: ROLES.STUDENT }),
-      User.countDocuments({ role: ROLES.PROCTOR }),
+      User.countDocuments({ ...userScope, role: ROLES.FACULTY }),
+      User.countDocuments({ ...userScope, role: ROLES.MODERATOR }),
+      AssessmentStudent.countDocuments(assessmentScope),
+      AssessmentProctor.countDocuments(assessmentScope),
       Assessment.countDocuments(assessmentScope),
-      Assessment.countDocuments({ ...assessmentScope, status: 'active' }),
+      Assessment.countDocuments({ ...assessmentScope, status: 'review' }),
+      Assessment.countDocuments({ ...assessmentScope, status: { $nin: ['draft', 'review'] }, visibility: 'visible' }),
+      AssessmentStudent.countDocuments({ ...assessmentScope, mailStatus: { $nin: ['sent', 'resent'] } }),
+      AssessmentProctor.countDocuments({ ...assessmentScope, mailStatus: { $nin: ['sent', 'resent'] } }),
+      EmailTemplate.countDocuments({ status: 'active' }),
       AuditLog.find({ action: { $not: { $regex: '^request\\.' } } })
         .sort({ createdAt: -1 })
         .limit(8)
-        .select('action targetType reason actorRole createdAt'),
+        .select('action targetType reason actorRole actorName createdAt newValue'),
     ]);
 
     res.json({
       role: req.user.role,
       counts: {
         admins: req.user.role === ROLES.SUPER_ADMIN ? admins : undefined,
+        faculty,
+        moderators,
         students,
         proctors,
         assessments,
-        activeAssessments,
-        pendingMails: 0,
+        reviewAssessments,
+        publishedAssessments,
+        activeAssessments: publishedAssessments,
+        pendingMails: pendingStudentMails + pendingProctorMails,
+        emailTemplates,
         ufmCases: 0,
       },
       recentActivity,
