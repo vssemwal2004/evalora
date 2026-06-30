@@ -10,16 +10,21 @@ const { signAssignmentToken, verifyAssignmentToken } = require('../utils/tokens'
 const { normalizeQuestionPayload } = require('../utils/questionValidation');
 const { sendAssignmentMail } = require('../services/credentialMail.service');
 const { writeAuditLog } = require('../services/audit.service');
+const { getCourseKey, pickPrimaryAssignment } = require('../services/assignment.service');
 
 const router = express.Router();
 router.use(authenticate, requireRole(ROLES.FACULTY, ROLES.MODERATOR));
 
 function hasPermission(req, permission) {
-  return req.user.permissions.includes(permission);
+  const roleDefaults = {
+    [ROLES.FACULTY]: ['work.view', 'assessment.questions.add', 'assessment.questions.edit', 'assessment.submit', 'library.view', 'library.create', 'library.edit', 'library.archive'],
+    [ROLES.MODERATOR]: ['work.view', 'assessment.review', 'assessment.questions.edit'],
+  };
+  return req.user.permissions.includes(permission) || (roleDefaults[req.user.role] || []).includes(permission);
 }
 
 function assignmentScope(req) {
-  return req.user.role === ROLES.FACULTY ? { facultyId: req.user._id } : { moderatorId: req.user._id, status: { $in: ['submitted', 'approved'] } };
+  return req.user.role === ROLES.FACULTY ? { facultyId: req.user._id } : { moderatorId: req.user._id };
 }
 
 function serialize(item) {
@@ -27,6 +32,23 @@ function serialize(item) {
   delete data.passwordHash;
   delete data.passwordPreview;
   return data;
+}
+
+function collapseDuplicateWorkItems(assignments) {
+  const grouped = new Map();
+
+  assignments
+    .filter((item) => item.assessmentId)
+    .forEach((item) => {
+      const assessmentId = String(item.assessmentId?._id || item.assessmentId);
+      const key = `${assessmentId}|${item.courseKey || getCourseKey(item)}`;
+      if (!grouped.has(key)) grouped.set(key, []);
+      grouped.get(key).push(item);
+    });
+
+  return [...grouped.values()]
+    .map((items) => pickPrimaryAssignment(items))
+    .sort((a, b) => new Date(b.updatedAt || b.createdAt || 0) - new Date(a.updatedAt || a.createdAt || 0));
 }
 
 async function findAssignment(req, { tokenRequired = false } = {}) {
@@ -48,7 +70,7 @@ router.get('/', async (req, res, next) => {
       .populate('facultyId', 'name email')
       .populate('moderatorId', 'name email')
       .sort({ updatedAt: -1 });
-    return res.json({ items: assignments.filter((item) => item.assessmentId).map(serialize) });
+    return res.json({ items: collapseDuplicateWorkItems(assignments).map(serialize) });
   } catch (error) { return next(error); }
 });
 
@@ -118,6 +140,66 @@ router.post('/:id/questions/import', async (req, res, next) => {
       },
     });
     return res.status(201).json({ items: created, imported: created.length });
+  } catch (error) { return next(error); }
+});
+
+router.post('/:id/questions/import-headings', async (req, res, next) => {
+  try {
+    const assignment = await findAssignment(req, { tokenRequired: true });
+    if (!assignment || req.user.role !== ROLES.FACULTY || !hasPermission(req, 'assessment.questions.add') || !hasPermission(req, 'library.view')) {
+      return res.status(403).json({ message: 'Library import access has not been granted.' });
+    }
+
+    const paperHeadings = Array.from(new Set((Array.isArray(req.body.paperHeadings) ? req.body.paperHeadings : [])
+      .map((heading) => String(heading || '').trim())
+      .filter(Boolean)));
+    if (!paperHeadings.length) return res.status(400).json({ message: 'Select at least one library folder.' });
+
+    const source = await Question.find({
+      paperHeading: { $in: paperHeadings },
+      createdBy: req.user._id,
+      status: 'active',
+    });
+    if (!source.length) return res.status(400).json({ message: 'No active questions found in the selected folders.' });
+
+    const sourceIds = source.map((question) => question._id);
+    const existing = await AssessmentQuestion.find({
+      assessmentId: assignment.assessmentId,
+      courseName: assignment.courseName,
+      ...(assignment.courseId ? { courseId: assignment.courseId } : {}),
+      libraryQuestionId: { $in: sourceIds },
+    }).select('libraryQuestionId');
+    const existingIds = new Set(existing.map((question) => String(question.libraryQuestionId)));
+    const candidates = source.filter((question) => !existingIds.has(String(question._id)));
+    if (!candidates.length) {
+      return res.status(409).json({ message: 'Selected folders are already added to this assignment.' });
+    }
+
+    const created = await AssessmentQuestion.insertMany(candidates.map((question) => ({
+        ...normalizeQuestionPayload(question.toObject()),
+        assessmentId: assignment.assessmentId,
+        ownerAdminId: assignment.ownerAdminId,
+        createdBy: req.user._id,
+        libraryQuestionId: question._id,
+        sourcePaperHeading: question.paperHeading,
+        courseName: assignment.courseName,
+        courseId: assignment.courseId,
+      })));
+
+    await writeAuditLog(req, {
+      action: 'work.question.import',
+      targetType: 'AssessmentAssignment',
+      targetId: assignment._id,
+      newValue: {
+        assessmentId: assignment.assessmentId,
+        courseName: assignment.courseName,
+        courseId: assignment.courseId,
+        paperHeadings,
+        imported: created.length,
+        skipped: source.length - created.length,
+      },
+    });
+    return res.status(201).json({ items: created, imported: created.length, skipped: source.length - created.length });
   } catch (error) { return next(error); }
 });
 

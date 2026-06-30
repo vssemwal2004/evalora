@@ -429,8 +429,8 @@ export function AddLibraryQuestionsPage() {
               Continue to Course Mapping
             </button>
           ) : workId ? (
-            <button className="primary-button h-9 px-3 text-xs" type="button" onClick={() => navigate(`/faculty/work/${workId}`)}>
-              Return to Assessment & Import
+            <button className="primary-button h-9 px-3 text-xs" type="button" onClick={() => navigate(`/faculty/library?workId=${workId}`)}>
+              Select From Library
             </button>
           ) : null}
         </div>
@@ -444,9 +444,12 @@ export function ViewLibraryPage() {
   const location = useLocation();
   const [searchParams] = useSearchParams();
   const assessmentId = searchParams.get('assessmentId') || '';
+  const workId = searchParams.get('workId') || '';
   const source = searchParams.get('source') || 'both';
   const roleBase = getRoleBase(location.pathname);
   const isAssessmentSelectMode = Boolean(assessmentId);
+  const isWorkSelectMode = Boolean(workId);
+  const isSelectMode = isAssessmentSelectMode || isWorkSelectMode;
   const [selectedHeadings, setSelectedHeadings] = useState([]);
   const [groups, setGroups] = useState([]);
   const [groupSearch, setGroupSearch] = useState('');
@@ -458,6 +461,8 @@ export function ViewLibraryPage() {
   const [folderAction, setFolderAction] = useState(null);
   const [folderDraft, setFolderDraft] = useState('');
   const [isActing, setIsActing] = useState(false);
+  const [importedHeadings, setImportedHeadings] = useState([]);
+  const importedHeadingSet = new Set(importedHeadings);
 
   function beginFolderEdit(group) {
     setFolderDraft(group.paperHeading);
@@ -501,6 +506,21 @@ export function ViewLibraryPage() {
   useEffect(() => {
     loadGroups();
   }, [loadGroups]);
+
+  useEffect(() => {
+    if (!workId) return;
+    const token = window.sessionStorage.getItem(`evalora_work_${workId}`);
+    if (!token) return;
+
+    api.get(`/work/${workId}/details`, { headers: { 'x-assignment-token': token } })
+      .then((response) => {
+        const headings = Array.from(new Set((response.data.questions || [])
+          .map((question) => question.sourcePaperHeading || question.paperHeading)
+          .filter(Boolean)));
+        setImportedHeadings(headings);
+      })
+      .catch(() => setImportedHeadings([]));
+  }, [workId]);
 
   async function renameFolder(event) {
     event.preventDefault();
@@ -549,7 +569,8 @@ export function ViewLibraryPage() {
 
   function openFolder(group) {
     setOpenFolderMenu('');
-    if (isAssessmentSelectMode) {
+    if (isWorkSelectMode && importedHeadingSet.has(group.paperHeading)) return;
+    if (isSelectMode) {
       setSelectedHeadings((current) =>
         current.includes(group.paperHeading)
           ? current.filter((heading) => heading !== group.paperHeading)
@@ -559,6 +580,36 @@ export function ViewLibraryPage() {
     }
 
     navigate(`questions?heading=${encodeURIComponent(group.paperHeading)}`, { relative: 'path' });
+  }
+
+  async function importSelectedFoldersToWork() {
+    if (!workId || selectedHeadings.length === 0) return;
+    const freshHeadings = selectedHeadings.filter((heading) => !importedHeadingSet.has(heading));
+    if (!freshHeadings.length) {
+      setError('Selected folders are already added to this assignment.');
+      return;
+    }
+
+    const token = window.sessionStorage.getItem(`evalora_work_${workId}`);
+    if (!token) {
+      setError('Unlock this assignment again before importing questions.');
+      return;
+    }
+
+    setIsActing(true);
+    setError('');
+    try {
+      await api.post(
+        `/work/${workId}/questions/import-headings`,
+        { paperHeadings: freshHeadings },
+        { headers: { 'x-assignment-token': token } }
+      );
+      navigate(`/faculty/work/${workId}`, { replace: true });
+    } catch (requestError) {
+      setError(requestError.response?.data?.message || 'Unable to import selected folders.');
+    } finally {
+      setIsActing(false);
+    }
   }
 
   function continueWithSelectedFolders() {
@@ -573,26 +624,39 @@ export function ViewLibraryPage() {
     <section className="space-y-5">
       <PageHeader
         eyebrow="Question Library"
-        title={isAssessmentSelectMode ? 'Select Library Folders' : 'View Library'}
+        title={isWorkSelectMode ? 'Select Question Folders' : isAssessmentSelectMode ? 'Select Library Folders' : 'View Library'}
         description={
-          isAssessmentSelectMode
+          isWorkSelectMode
+            ? 'Select existing folders for this assignment, or create a new heading and return here to import.'
+            : isAssessmentSelectMode
             ? 'Select one or more paper folders. Evalora will return to the assessment builder with those folders ready for course mapping.'
             : 'Library is organized as scalable heading folders. Open any heading to manage its questions on a separate table page.'
         }
         actions={
-          isAssessmentSelectMode ? (
+          isSelectMode ? (
             <>
               <button
                 className="secondary-button"
                 type="button"
-                onClick={() => navigate(`${roleBase}/library/add?assessmentId=${assessmentId}&source=${source}`)}
+                onClick={() => navigate(isWorkSelectMode ? `/faculty/library/add?workId=${workId}` : `${roleBase}/library/add?assessmentId=${assessmentId}&source=${source}`)}
               >
                 <Plus size={16} className="text-brand-500" />
                 Create New Heading
               </button>
-              <button className="primary-button" type="button" onClick={continueWithSelectedFolders} disabled={selectedHeadings.length === 0}>
+              {isWorkSelectMode ? (
+                <button className="secondary-button" type="button" onClick={() => navigate(`/faculty/work/${workId}`)}>
+                  <ArrowLeft size={16} className="text-brand-500" />
+                  Back
+                </button>
+              ) : null}
+              <button
+                className="primary-button"
+                type="button"
+                onClick={isWorkSelectMode ? importSelectedFoldersToWork : continueWithSelectedFolders}
+                disabled={selectedHeadings.length === 0 || isActing}
+              >
                 <CheckCircle2 size={16} />
-                Add {selectedHeadings.length || ''} Folder{selectedHeadings.length === 1 ? '' : 's'}
+                {isWorkSelectMode ? 'Import' : 'Add'} {selectedHeadings.length || ''} Folder{selectedHeadings.length === 1 ? '' : 's'}
               </button>
             </>
           ) : null
@@ -604,7 +668,9 @@ export function ViewLibraryPage() {
       <SectionPanel
         title="Paper Folders"
         description={
-          isAssessmentSelectMode
+          isWorkSelectMode
+            ? 'Select folder headings to import their questions into this assignment.'
+            : isAssessmentSelectMode
             ? 'Search and select folders. Course mapping will happen back inside Create Assessment.'
             : 'Search, scan, and open paper headings without loading question rows on this page.'
         }
@@ -639,13 +705,23 @@ export function ViewLibraryPage() {
               ) : groups.length === 0 ? (
                 <tr><td colSpan={7}><EmptyState title="No library folders found" description="Add questions under a paper heading to create folders." /></td></tr>
               ) : (
-                groups.map((group) => (
-                  <tr key={group.paperHeading}>
+                groups.map((group) => {
+                  const isImported = isWorkSelectMode && importedHeadingSet.has(group.paperHeading);
+                  const isSelected = selectedHeadings.includes(group.paperHeading);
+                  return (
+                  <tr key={group.paperHeading} className={isImported ? 'bg-slate-50/70' : ''}>
                     <td className="min-w-[320px]">
-                      <button className="text-left text-sm font-semibold text-slate-950 hover:text-brand-600" type="button" onClick={() => openFolder(group)}>
+                      <button
+                        className={`text-left text-sm font-semibold ${isImported ? 'cursor-not-allowed text-slate-400' : 'text-slate-950 hover:text-brand-600'}`}
+                        type="button"
+                        onClick={() => openFolder(group)}
+                        disabled={isImported}
+                      >
                         {group.paperHeading}
                       </button>
-                      {isAssessmentSelectMode && selectedHeadings.includes(group.paperHeading) ? (
+                      {isImported ? (
+                        <span className="ml-3 rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[11px] font-bold text-slate-500">Already added</span>
+                      ) : isSelectMode && isSelected ? (
                         <span className="ml-3 status-badge status-active">Selected</span>
                       ) : null}
                     </td>
@@ -655,13 +731,14 @@ export function ViewLibraryPage() {
                     <td>{group.totalMarks || 0}</td>
                     <td className="text-slate-500">{new Date(group.lastUpdatedAt).toLocaleString()}</td>
                     <td className="relative">
-                      {isAssessmentSelectMode ? (
+                      {isSelectMode ? (
                         <button
-                          className={selectedHeadings.includes(group.paperHeading) ? 'secondary-button h-9 px-3 text-xs' : 'primary-button h-9 px-3 text-xs'}
+                          className={isImported || isSelected ? 'secondary-button h-9 px-3 text-xs' : 'primary-button h-9 px-3 text-xs'}
                           type="button"
                           onClick={() => openFolder(group)}
+                          disabled={isImported}
                         >
-                          {selectedHeadings.includes(group.paperHeading) ? 'Remove' : 'Select'}
+                          {isImported ? 'Added' : isSelected ? 'Remove' : 'Select'}
                         </button>
                       ) : (
                         <>
@@ -692,7 +769,8 @@ export function ViewLibraryPage() {
                       )}
                     </td>
                   </tr>
-                ))
+                  );
+                })
               )}
             </tbody>
           </table>

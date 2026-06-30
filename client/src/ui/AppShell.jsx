@@ -432,11 +432,11 @@ export function AppShell({ role }) {
         onMouseEnter={() => setIsSidebarHovered(true)}
         onMouseLeave={() => setIsSidebarHovered(false)}
       >
-        <div className={`shrink-0 flex items-center border-b border-orange-100/80 transition-all duration-300 ${isSidebarHovered ? 'h-14 justify-start px-4' : 'h-14 justify-center px-2'}`}>
+        <div className={`shrink-0 flex items-center border-b border-orange-100/80 transition-all duration-300 ${isSidebarHovered ? 'h-28 justify-start px-4' : 'h-20 justify-center px-1.5'}`}>
           <img
             src="/logo.webp"
             alt="Evalora"
-            className={`object-contain transition-all duration-300 ${isSidebarHovered ? 'h-9 w-32 object-left' : 'h-8 w-10 object-center'}`}
+            className={`object-contain transition-all duration-300 ${isSidebarHovered ? 'h-24 w-[190px] object-left' : 'h-14 w-14 object-center'}`}
           />
         </div>
 

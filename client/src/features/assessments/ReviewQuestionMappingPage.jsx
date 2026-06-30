@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, BookOpen, CheckCircle2, Search, Send, ShieldCheck, Trash2, UserRoundCog, Users } from 'lucide-react';
+import { Link, useLocation, useParams } from 'react-router-dom';
+import { AlertTriangle, ArrowLeft, BookOpen, CheckCircle2, Copy, KeyRound, Mail, RefreshCw, Search, Send, ShieldCheck, Trash2, UserRoundCog, Users, X } from 'lucide-react';
 import { api } from '../../lib/api';
 import { EmptyState } from '../../ui/Surface.jsx';
+import { useAuth } from '../auth/AuthContext.jsx';
 
 function getRoleBase(pathname) {
   return pathname.startsWith('/super-admin') ? '/super-admin' : '/admin';
@@ -83,10 +84,257 @@ function courseStatusMeta(status, completed) {
   };
 }
 
+function AssignmentPasswordsModal({ assessment, items, isLoading, onClose, onCopy }) {
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/45 p-4">
+      <div className="flex max-h-[86vh] w-full max-w-6xl flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl">
+        <div className="flex items-start justify-between gap-3 border-b border-slate-200 bg-slate-50 px-5 py-4">
+          <div className="flex min-w-0 items-start gap-3">
+            <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-brand-100 bg-brand-50 text-brand-600">
+              <KeyRound size={18} />
+            </span>
+            <div className="min-w-0">
+              <p className="text-xs font-bold uppercase tracking-wider text-brand-600">Assignment Passwords</p>
+              <h2 className="mt-1 truncate text-lg font-bold text-slate-950">{assessment?.title || 'Assessment'}</h2>
+              <p className="mt-1 text-xs font-semibold text-slate-500">{assessment?.assessmentCode || ''}</p>
+            </div>
+          </div>
+          <button className="secondary-button h-8 w-8 p-0" type="button" onClick={onClose} aria-label="Close passwords">
+            <X size={15} />
+          </button>
+        </div>
+
+        <div className="overflow-auto p-4">
+          {isLoading ? (
+            <div className="rounded-lg border border-slate-200 bg-white p-8 text-center text-sm font-semibold text-slate-500">Loading assignment passwords...</div>
+          ) : items.length === 0 ? (
+            <EmptyState title="No assigned work yet" description="Assign faculty and moderator to generate assignment passwords." />
+          ) : (
+            <div className="overflow-hidden rounded-lg border border-slate-200">
+              <table className="w-full min-w-[980px] text-left text-sm">
+                <thead className="bg-slate-50 text-[11px] font-bold uppercase text-slate-500">
+                  <tr>
+                    <th className="px-4 py-3">Course</th>
+                    <th className="px-4 py-3">Faculty</th>
+                    <th className="px-4 py-3">Moderator</th>
+                    <th className="px-4 py-3">Password</th>
+                    <th className="px-4 py-3">Status</th>
+                    <th className="px-4 py-3">Mail</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-200">
+                  {items.map((item) => (
+                    <tr key={item.assignmentId || item.courseSubdocumentId} className="align-top">
+                      <td className="px-4 py-3">
+                        <p className="font-bold text-slate-950">{item.courseName}</p>
+                        <p className="mt-0.5 text-xs font-semibold text-slate-500">{item.courseId || 'No course ID'}</p>
+                      </td>
+                      <td className="px-4 py-3">
+                        <p className="font-semibold text-slate-900">{item.faculty?.name || 'Not assigned'}</p>
+                        <p className="mt-0.5 text-xs text-slate-500">{item.faculty?.email || '-'}</p>
+                      </td>
+                      <td className="px-4 py-3">
+                        <p className="font-semibold text-slate-900">{item.moderator?.name || 'Not assigned'}</p>
+                        <p className="mt-0.5 text-xs text-slate-500">{item.moderator?.email || '-'}</p>
+                      </td>
+                      <td className="px-4 py-3">
+                        {item.password ? (
+                          <div className="inline-flex items-center overflow-hidden rounded-md border border-slate-200 bg-slate-50">
+                            <span className="px-3 py-2 font-mono text-xs font-bold text-slate-950">{item.password}</span>
+                            <button className="grid h-8 w-8 place-items-center border-l border-slate-200 text-brand-600 hover:bg-white" type="button" onClick={() => onCopy(item.password, 'assignment password')} aria-label="Copy password">
+                              <Copy size={14} />
+                            </button>
+                          </div>
+                        ) : (
+                          <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-1 text-xs font-bold text-amber-700">Not generated</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className="rounded-full border border-slate-200 bg-white px-2 py-1 text-xs font-bold capitalize text-slate-700">{String(item.status || '').replace(/_/g, ' ')}</span>
+                      </td>
+                      <td className="px-4 py-3 text-xs font-semibold text-slate-500">
+                        <p>Faculty: {item.facultyMail?.status || 'not sent'}</p>
+                        <p className="mt-1">Moderator: {item.moderatorMail?.status || 'not sent'}</p>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RestartReviewModal({ course, isBusy, message, onMessageChange, onCancel, onConfirm }) {
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/45 p-4">
+      <div className="w-full max-w-xl overflow-hidden rounded-xl bg-white shadow-2xl">
+        <div className="flex items-start justify-between gap-3 border-b border-amber-200 bg-amber-50 p-4">
+          <div className="flex gap-3">
+            <span className="grid h-10 w-10 shrink-0 place-items-center rounded-lg border border-amber-200 bg-white text-amber-700">
+              <AlertTriangle size={20} />
+            </span>
+            <div>
+              <p className="text-xs font-bold uppercase tracking-wider text-amber-700">Review again</p>
+              <h2 className="mt-1 text-lg font-bold text-slate-950">{course?.courseName}</h2>
+              <p className="mt-1 text-sm leading-5 text-amber-800">
+                This will reopen the approved course, generate a new assignment password, and send it back through faculty and moderator review.
+              </p>
+            </div>
+          </div>
+          <button className="secondary-button h-8 w-8 p-0" type="button" onClick={onCancel} disabled={isBusy} aria-label="Close review again warning">
+            <X size={15} />
+          </button>
+        </div>
+        <div className="space-y-3 p-4">
+          <div className="grid gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm sm:grid-cols-2">
+            <p><span className="text-slate-500">Faculty</span><b className="mt-0.5 block text-slate-950">{course?.facultyName || 'Assigned faculty'}</b></p>
+            <p><span className="text-slate-500">Moderator</span><b className="mt-0.5 block text-slate-950">{course?.moderatorName || 'Assigned moderator'}</b></p>
+          </div>
+          <label className="block">
+            <span className="field-label">Priority message</span>
+            <textarea
+              className="field-input mt-1 min-h-24 text-sm"
+              value={message}
+              onChange={(event) => onMessageChange(event.target.value)}
+              placeholder="Example: Review again requested after admin updated course requirements."
+            />
+          </label>
+        </div>
+        <div className="flex justify-end gap-2 border-t border-slate-200 bg-slate-50 p-4">
+          <button className="secondary-button" type="button" onClick={onCancel} disabled={isBusy}>Cancel</button>
+          <button className="primary-button bg-amber-600 hover:bg-amber-700" type="button" onClick={onConfirm} disabled={isBusy}>
+            <RefreshCw size={16} />
+            {isBusy ? 'Restarting' : 'Confirm review again'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PublishChecklistModal({ assessment, reviewSummary, students, isLoading, isPublishing, isSendingMail, onClose, onPublish, onSendStudentMail }) {
+  const courses = reviewSummary?.courses || [];
+  const pendingCourses = courses.filter((course) => !course.completed);
+  const unsentStudents = students.filter((student) => !['sent', 'resent'].includes(student.mailStatus));
+  const isPublished = !['draft', 'review'].includes(assessment?.status);
+
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/45 p-4">
+      <div className="flex max-h-[88vh] w-full max-w-3xl flex-col overflow-hidden rounded-xl bg-white shadow-2xl">
+        <div className="flex items-start justify-between gap-3 border-b border-slate-200 bg-slate-50 p-4">
+          <div>
+            <p className="text-xs font-bold uppercase tracking-wider text-brand-600">Publish checklist</p>
+            <h2 className="mt-1 text-lg font-bold text-slate-950">{assessment?.title || 'Assessment'}</h2>
+            <p className="mt-1 text-xs font-semibold text-slate-500">{assessment?.assessmentCode || ''}</p>
+          </div>
+          <button className="secondary-button h-8 w-8 p-0" type="button" onClick={onClose} disabled={isPublishing || isSendingMail} aria-label="Close publish checklist">
+            <X size={15} />
+          </button>
+        </div>
+
+        <div className="min-h-0 overflow-y-auto p-4">
+          {isLoading ? (
+            <div className="rounded-lg border border-slate-200 p-8 text-center text-sm font-semibold text-slate-500">Checking assessment readiness...</div>
+          ) : (
+            <div className="space-y-3">
+              <div className="grid gap-3 md:grid-cols-3">
+                <div className="rounded-lg border border-slate-200 bg-white p-3">
+                  <p className="text-[11px] font-bold uppercase text-slate-500">Question review</p>
+                  <p className={`mt-2 text-xl font-bold ${pendingCourses.length ? 'text-amber-700' : 'text-emerald-700'}`}>{reviewSummary?.completed || 0}/{reviewSummary?.total || 0}</p>
+                </div>
+                <div className="rounded-lg border border-slate-200 bg-white p-3">
+                  <p className="text-[11px] font-bold uppercase text-slate-500">Students</p>
+                  <p className="mt-2 text-xl font-bold text-slate-950">{students.length}</p>
+                </div>
+                <div className="rounded-lg border border-slate-200 bg-white p-3">
+                  <p className="text-[11px] font-bold uppercase text-slate-500">Pending student mail</p>
+                  <p className={`mt-2 text-xl font-bold ${unsentStudents.length ? 'text-amber-700' : 'text-emerald-700'}`}>{unsentStudents.length}</p>
+                </div>
+              </div>
+
+              {pendingCourses.length ? (
+                <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
+                  <div className="flex items-center gap-2 text-amber-800">
+                    <AlertTriangle size={16} />
+                    <p className="text-sm font-bold">Some courses are still pending review.</p>
+                  </div>
+                  <div className="mt-2 max-h-36 overflow-y-auto rounded-md border border-amber-200 bg-white">
+                    {pendingCourses.map((course) => (
+                      <div key={course.courseSubdocumentId || course.courseName} className="flex items-center justify-between gap-3 border-b border-amber-100 px-3 py-2 last:border-b-0">
+                        <div>
+                          <p className="text-sm font-semibold text-slate-950">{course.courseName}</p>
+                          <p className="text-xs text-slate-500">{course.courseId || 'No course ID'}</p>
+                        </div>
+                        <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-1 text-xs font-bold capitalize text-amber-700">{course.status || 'pending'}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm font-semibold text-emerald-800">
+                  All course question reviews are complete.
+                </div>
+              )}
+
+              {unsentStudents.length ? (
+                <div className="rounded-lg border border-slate-200 bg-white">
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 p-3">
+                    <div>
+                      <p className="text-sm font-bold text-slate-950">Student credential mails not sent</p>
+                      <p className="text-xs font-semibold text-slate-500">Send credentials after publishing so students can access the exam.</p>
+                    </div>
+                    <button className="secondary-button h-9 px-3 text-xs" type="button" onClick={onSendStudentMail} disabled={!isPublished || isSendingMail}>
+                      <Mail size={14} className="text-brand-500" />
+                      {isSendingMail ? 'Sending...' : isPublished ? 'Send student mails' : 'Publish first'}
+                    </button>
+                  </div>
+                  <div className="max-h-44 overflow-y-auto">
+                    {unsentStudents.slice(0, 20).map((student) => (
+                      <div key={student._id} className="grid gap-2 border-b border-slate-100 px-3 py-2 text-sm md:grid-cols-[minmax(0,1fr)_10rem_8rem]">
+                        <div className="min-w-0">
+                          <p className="truncate font-semibold text-slate-950">{student.name}</p>
+                          <p className="truncate text-xs text-slate-500">{student.email}</p>
+                        </div>
+                        <p className="text-xs font-semibold text-slate-600">{student.generatedExamId}</p>
+                        <span className="text-xs font-bold capitalize text-amber-700">{student.mailStatus?.replace('_', ' ') || 'not sent'}</span>
+                      </div>
+                    ))}
+                    {unsentStudents.length > 20 ? <p className="px-3 py-2 text-xs font-semibold text-slate-500">+ {unsentStudents.length - 20} more students</p> : null}
+                  </div>
+                </div>
+              ) : (
+                <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm font-semibold text-emerald-800">
+                  All student credential mails are already sent, or no students are added.
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        <div className="flex flex-wrap justify-end gap-2 border-t border-slate-200 bg-slate-50 p-4">
+          <button className="secondary-button" type="button" onClick={onClose} disabled={isPublishing || isSendingMail}>Close</button>
+          <button className="primary-button" type="button" onClick={onPublish} disabled={isLoading || isPublishing || pendingCourses.length > 0 || isPublished}>
+            <CheckCircle2 size={16} />
+            {isPublished ? 'Published' : isPublishing ? 'Publishing...' : 'Publish assessment'}
+          </button>
+          <button className="primary-button bg-sky-600 hover:bg-sky-700" type="button" onClick={onSendStudentMail} disabled={isLoading || isSendingMail || !isPublished || unsentStudents.length === 0}>
+            <Mail size={16} />
+            {isSendingMail ? 'Sending...' : 'Send student mails'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function ReviewQuestionMappingPage() {
   const { assessmentId } = useParams();
   const location = useLocation();
-  const navigate = useNavigate();
+  const { user } = useAuth();
   const roleBase = getRoleBase(location.pathname);
   const [assessment, setAssessment] = useState(null);
   const [libraryGroups, setLibraryGroups] = useState([]);
@@ -101,6 +349,15 @@ export function ReviewQuestionMappingPage() {
   const [activePanel, setActivePanel] = useState('questions');
   const [busyKey, setBusyKey] = useState('');
   const [isPublishing, setIsPublishing] = useState(false);
+  const [passwordsOpen, setPasswordsOpen] = useState(false);
+  const [passwordItems, setPasswordItems] = useState([]);
+  const [passwordsLoading, setPasswordsLoading] = useState(false);
+  const [restartTarget, setRestartTarget] = useState(null);
+  const [restartMessage, setRestartMessage] = useState('');
+  const [publishOpen, setPublishOpen] = useState(false);
+  const [publishStudents, setPublishStudents] = useState([]);
+  const [publishLoading, setPublishLoading] = useState(false);
+  const [isSendingStudentMail, setIsSendingStudentMail] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -293,17 +550,78 @@ export function ReviewQuestionMappingPage() {
     }
   }
 
+  async function copyText(value, label) {
+    try {
+      await navigator.clipboard.writeText(String(value));
+      setNotice(`${label} copied.`);
+    } catch {
+      setError(`Unable to copy ${label}.`);
+    }
+  }
+
+  async function openAssignmentPasswords() {
+    setPasswordsOpen(true);
+    setPasswordsLoading(true);
+    setError('');
+    try {
+      const response = await api.get(`/assessments/${assessmentId}/assignments/passwords`);
+      setPasswordItems(response.data.items || []);
+    } catch (requestError) {
+      setError(requestError.response?.data?.message || 'Unable to load assignment passwords.');
+      setPasswordItems([]);
+    } finally {
+      setPasswordsLoading(false);
+    }
+  }
+
+  async function openPublishChecklist() {
+    setPublishOpen(true);
+    setPublishLoading(true);
+    setError('');
+    setNotice('');
+    try {
+      const response = await api.get(`/assessments/${assessmentId}/students`);
+      setPublishStudents(response.data.items || []);
+    } catch (requestError) {
+      setError(requestError.response?.data?.message || 'Unable to load publish checklist.');
+      setPublishStudents([]);
+    } finally {
+      setPublishLoading(false);
+    }
+  }
+
+  async function restartCourseReview(course) {
+    setBusyKey(`restart-${course._id}`);
+    setError('');
+    setNotice('');
+    try {
+      const response = await api.post(`/assessments/${assessmentId}/assignments/restart-course`, {
+        courseSubdocumentId: course._id,
+        message: restartMessage.trim() || `Review again requested by ${user?.name || 'admin'}.`,
+      });
+      setAssessment(response.data.assessment);
+      setActivePanel('team');
+      setRestartTarget(null);
+      setRestartMessage('');
+      setNotice(`${course.courseName} review restarted. The same faculty/moderator card has been updated.`);
+    } catch (requestError) {
+      setError(requestError.response?.data?.message || 'Unable to restart this course review.');
+    } finally {
+      setBusyKey('');
+    }
+  }
+
   async function publishAssessment() {
     setIsPublishing(true);
     setError('');
     setNotice('');
     try {
-      await api.patch(`/assessments/${assessmentId}`, {
+      const response = await api.patch(`/assessments/${assessmentId}`, {
         status: 'pending',
         visibility: 'visible',
       });
+      setAssessment(response.data.assessment);
       setNotice('Assessment published successfully.');
-      navigate(`${roleBase}/assessments/my`, { replace: true });
     } catch (requestError) {
       setError(requestError.response?.data?.message || 'Unable to publish assessment.');
     } finally {
@@ -311,10 +629,26 @@ export function ReviewQuestionMappingPage() {
     }
   }
 
+  async function sendStudentMailsFromPublish() {
+    setIsSendingStudentMail(true);
+    setError('');
+    setNotice('');
+    try {
+      const response = await api.post(`/assessments/${assessmentId}/students/send-mail`);
+      setNotice(response.data.message || 'Student credential mails processed.');
+      const studentsResponse = await api.get(`/assessments/${assessmentId}/students`);
+      setPublishStudents(studentsResponse.data.items || []);
+    } catch (requestError) {
+      setError(requestError.response?.data?.message || 'Unable to send student mails.');
+    } finally {
+      setIsSendingStudentMail(false);
+    }
+  }
+
   return (
     <section className="space-y-3">
       <div className="rounded-lg border border-slate-200 bg-white shadow-sm">
-        <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+        <div className="grid gap-3 px-4 py-3 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-start">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
               <p className="text-[11px] font-bold uppercase text-brand-600">Question Setup</p>
@@ -332,33 +666,82 @@ export function ReviewQuestionMappingPage() {
             <h1 className="mt-1 truncate text-lg font-semibold text-slate-950">{assessment?.title || 'Add Questions'}</h1>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="hidden items-center overflow-hidden rounded-md border border-slate-200 text-xs font-bold text-slate-600 md:flex">
+          <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto] xl:min-w-[36rem] xl:grid-cols-1 xl:justify-items-end">
+            <div className="grid w-full grid-cols-2 overflow-hidden rounded-md border border-slate-200 text-xs font-bold text-slate-600 sm:grid-cols-4 xl:max-w-md">
               <span className="px-2.5 py-1.5">Total {courseStats.total}</span>
               <span className="border-l border-slate-200 px-2.5 py-1.5 text-emerald-700">Ready {courseStats.completed}</span>
               <span className="border-l border-slate-200 px-2.5 py-1.5 text-sky-700">Review {courseStats.assigned}</span>
               <span className="border-l border-slate-200 px-2.5 py-1.5 text-amber-700">Pending {courseStats.pending}</span>
             </div>
-            <Link className="secondary-button h-9 px-3 text-xs" to={`${roleBase}/assessments/review`}>
-              <ArrowLeft size={14} />
-              Back
-            </Link>
-            <button
-              className="primary-button h-9 px-3 text-xs"
-              type="button"
-              onClick={publishAssessment}
-              disabled={isPublishing || assessment?.status !== 'review' || progressPercent !== 100}
-              title={progressPercent === 100 ? 'Publish assessment' : 'Complete all courses before publishing'}
-            >
-              <CheckCircle2 size={15} />
-              {isPublishing ? 'Publishing' : 'Publish'}
-            </button>
+            <div className="flex flex-wrap items-center justify-start gap-2 sm:justify-end">
+              <Link className="secondary-button h-9 px-3 text-xs" to={`${roleBase}/assessments/review`}>
+                <ArrowLeft size={14} />
+                Back
+              </Link>
+              <button className="secondary-button h-9 px-3 text-xs" type="button" onClick={openAssignmentPasswords}>
+                <KeyRound size={14} />
+                Passwords
+              </button>
+              {courseStats.completed > 0 ? (
+                <Link className="secondary-button h-9 px-3 text-xs" to={`${roleBase}/assessments/${assessmentId}/questions`}>
+                  <BookOpen size={14} />
+                  View Questions
+                </Link>
+              ) : null}
+              <button
+                className="primary-button h-9 px-3 text-xs"
+                type="button"
+                onClick={openPublishChecklist}
+                disabled={isPublishing || assessment?.status !== 'review'}
+                title="Review readiness before publishing"
+              >
+                <CheckCircle2 size={15} />
+                Publish
+              </button>
+            </div>
           </div>
         </div>
       </div>
 
       {error ? <div className="rounded-md border border-red-200 bg-red-50 px-4 py-2 text-sm font-semibold text-red-700">{error}</div> : null}
       {notice ? <div className="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-700">{notice}</div> : null}
+      {passwordsOpen ? (
+        <AssignmentPasswordsModal
+          assessment={assessment}
+          items={passwordItems}
+          isLoading={passwordsLoading}
+          onClose={() => setPasswordsOpen(false)}
+          onCopy={copyText}
+        />
+      ) : null}
+      {restartTarget ? (
+        <RestartReviewModal
+          course={restartTarget}
+          isBusy={busyKey === `restart-${restartTarget._id}`}
+          message={restartMessage}
+          onMessageChange={setRestartMessage}
+          onCancel={() => {
+            if (!busyKey) {
+              setRestartTarget(null);
+              setRestartMessage('');
+            }
+          }}
+          onConfirm={() => restartCourseReview(restartTarget)}
+        />
+      ) : null}
+      {publishOpen ? (
+        <PublishChecklistModal
+          assessment={assessment}
+          reviewSummary={reviewSummary}
+          students={publishStudents}
+          isLoading={publishLoading}
+          isPublishing={isPublishing}
+          isSendingMail={isSendingStudentMail}
+          onClose={() => setPublishOpen(false)}
+          onPublish={publishAssessment}
+          onSendStudentMail={sendStudentMailsFromPublish}
+        />
+      ) : null}
 
       {isLoading ? (
         <div className="rounded-lg border border-slate-200 bg-white p-8 text-center text-sm font-semibold text-slate-500">Loading courses...</div>
@@ -456,10 +839,27 @@ export function ReviewQuestionMappingPage() {
                       <p className="truncate text-base font-semibold text-slate-950">{activeCourse.courseName}</p>
                       <p className="mt-0.5 text-xs font-semibold text-slate-500">{activeCourse.courseId || 'No course ID'}</p>
                     </div>
-                    <span className={`inline-flex items-center gap-1 rounded-full border px-3 py-1 text-xs font-bold ${activeStatusMeta.className}`}>
-                      <span className={`h-2 w-2 rounded-full ${activeStatusMeta.dot}`} />
-                      {activeStatusMeta.label}
-                    </span>
+                    <div className="flex shrink-0 items-center gap-2">
+                      <span className={`inline-flex items-center gap-1 rounded-full border px-3 py-1 text-xs font-bold ${activeStatusMeta.className}`}>
+                        <span className={`h-2 w-2 rounded-full ${activeStatusMeta.dot}`} />
+                        {activeStatusMeta.label}
+                      </span>
+                      {activeStatusValue === 'approved' ? (
+                        <button
+                          className="secondary-button h-8 px-3 text-xs"
+                          type="button"
+                          onClick={() => {
+                            setRestartTarget(activeCourse);
+                            setRestartMessage(`Review again requested by ${user?.name || 'admin'}.`);
+                          }}
+                          disabled={busyKey === `restart-${activeCourse._id}`}
+                          title="Send updated question work through faculty and moderator again"
+                        >
+                          <RefreshCw size={14} />
+                          {busyKey === `restart-${activeCourse._id}` ? 'Restarting' : 'Review again'}
+                        </button>
+                      ) : null}
+                    </div>
                   </div>
 
                   <div className="mt-3 grid grid-cols-2 rounded-md border border-slate-200 bg-slate-50 p-1">
@@ -497,15 +897,21 @@ export function ReviewQuestionMappingPage() {
                                 {activeCourseStatus?.paperHeading ? ` / ${activeCourseStatus.paperHeading}` : ''}
                               </p>
                             </div>
-                            <button
-                              className="secondary-button text-red-700 hover:border-red-200 hover:bg-red-50 hover:text-red-700"
-                              type="button"
-                              onClick={() => removeCourseMapping(activeCourse)}
-                              disabled={busyKey === `remove-${activeCourse._id}`}
-                            >
-                              <Trash2 size={15} />
-                              {busyKey === `remove-${activeCourse._id}` ? 'Removing' : 'Remove'}
-                            </button>
+                            <div className="flex flex-wrap gap-2">
+                              <Link className="secondary-button" to={`${roleBase}/assessments/${assessmentId}/questions`}>
+                                <BookOpen size={15} />
+                                View Questions
+                              </Link>
+                              <button
+                                className="secondary-button text-red-700 hover:border-red-200 hover:bg-red-50 hover:text-red-700"
+                                type="button"
+                                onClick={() => removeCourseMapping(activeCourse)}
+                                disabled={busyKey === `remove-${activeCourse._id}`}
+                              >
+                                <Trash2 size={15} />
+                                {busyKey === `remove-${activeCourse._id}` ? 'Removing' : 'Remove'}
+                              </button>
+                            </div>
                           </div>
                         </div>
                       ) : (

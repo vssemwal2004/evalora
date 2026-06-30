@@ -360,6 +360,38 @@ export function AssessmentStudentsPage({ assessmentId: assessmentIdProp, embedde
     );
   }
 
+  async function downloadStudentData() {
+    await downloadXlsx(
+      [
+        [
+          { value: 'Student Name', fontWeight: 'bold' },
+          { value: 'Student Email', fontWeight: 'bold' },
+          { value: 'Application Number', fontWeight: 'bold' },
+          { value: 'Course Name', fontWeight: 'bold' },
+          { value: 'Course ID', fontWeight: 'bold' },
+          { value: 'Exam ID', fontWeight: 'bold' },
+          { value: 'Password', fontWeight: 'bold' },
+          { value: 'Mail Status', fontWeight: 'bold' },
+          { value: 'Exam Status', fontWeight: 'bold' },
+          { value: 'Added At', fontWeight: 'bold' },
+        ],
+        ...students.map((student) => [
+          { value: student.name || '' },
+          { value: student.email || '' },
+          { value: student.applicationNumber || '' },
+          { value: student.courseName || '' },
+          { value: student.courseId || '' },
+          { value: student.generatedExamId || '' },
+          { value: student.passwordPreview || '' },
+          { value: String(student.mailStatus || '').replace('_', ' ') },
+          { value: String(student.examStatus || '').replace('_', ' ') },
+          { value: student.createdAt ? new Date(student.createdAt).toLocaleString() : '' },
+        ]),
+      ],
+      `evalora-student-credentials-${assessment?.assessmentCode || assessmentId}.xlsx`
+    );
+  }
+
   async function validateStudentRows(rows, source = 'excel') {
     setIsBulkValidating(true);
     setBulkResult(null);
@@ -586,10 +618,16 @@ export function AssessmentStudentsPage({ assessmentId: assessmentIdProp, embedde
             title="Student Directory"
             description={embedded ? 'Compact candidate list with credentials and mail status.' : 'Students for this assessment, with credential visibility and mail actions.'}
             actions={
-            <button className="secondary-button h-9 px-3 text-xs" type="button" onClick={() => setActiveView('add')}>
-              <Plus size={14} className="text-brand-500" />
-              Add Student
-            </button>
+              <div className="flex flex-wrap justify-end gap-2">
+                <button className="secondary-button h-9 px-3 text-xs" type="button" onClick={downloadStudentData} disabled={!students.length}>
+                  <Download size={14} className="text-brand-500" />
+                  Download Data
+                </button>
+                <button className="secondary-button h-9 px-3 text-xs" type="button" onClick={() => setActiveView('add')}>
+                  <Plus size={14} className="text-brand-500" />
+                  Add Student
+                </button>
+              </div>
             }
           >
           <div className="grid gap-2 border-b border-slate-200 px-3 py-2.5 md:grid-cols-[1fr_170px_auto]">

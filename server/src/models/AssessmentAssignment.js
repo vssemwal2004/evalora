@@ -18,6 +18,7 @@ const assessmentAssignmentSchema = new mongoose.Schema(
     ownerAdminId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
     courseId: { type: String, trim: true, uppercase: true },
     courseName: { type: String, trim: true, required: true },
+    courseKey: { type: String, trim: true, index: true },
     courseSubdocumentId: { type: mongoose.Schema.Types.ObjectId, required: true },
     facultyId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
     moderatorId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
@@ -40,6 +41,10 @@ const assessmentAssignmentSchema = new mongoose.Schema(
 );
 
 assessmentAssignmentSchema.index({ assessmentId: 1, courseSubdocumentId: 1 }, { unique: true });
+assessmentAssignmentSchema.index(
+  { assessmentId: 1, courseKey: 1 },
+  { unique: true, partialFilterExpression: { courseKey: { $type: 'string' } } }
+);
 assessmentAssignmentSchema.methods.comparePassword = function comparePassword(password) {
   return bcrypt.compare(password, this.passwordHash);
 };

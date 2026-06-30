@@ -10,7 +10,7 @@ const AssessmentSecurityEvent = require('../models/AssessmentSecurityEvent');
 const { ROLES } = require('../constants/roles');
 const { authenticate, requirePermission, requireRole } = require('../middleware/auth');
 const { writeAuditLog } = require('../services/audit.service');
-const { syncAssessmentAssignments } = require('../services/assignment.service');
+const { getCourseKey, pickPrimaryAssignment, syncAssessmentAssignments } = require('../services/assignment.service');
 
 const router = express.Router();
 
@@ -85,11 +85,17 @@ function emptyReviewSummary() {
 function buildReviewSummary(counts, assessmentId, assessment, assignments = [], questionMappings = []) {
   const summary = emptyReviewSummary();
   const courses = assessment?.courses || [];
-  const assignmentByCourseId = new Map(
-    assignments
-      .filter((item) => String(item.assessmentId) === String(assessmentId))
-      .map((item) => [String(item.courseSubdocumentId), item])
-  );
+  const assignmentGroups = new Map();
+  assignments
+    .filter((item) => String(item.assessmentId) === String(assessmentId))
+    .forEach((item) => {
+      const courseKey = item.courseKey || getCourseKey(item);
+      if (!assignmentGroups.has(courseKey)) assignmentGroups.set(courseKey, []);
+      assignmentGroups.get(courseKey).push(item);
+      const subdocumentKey = `subdocument:${String(item.courseSubdocumentId)}`;
+      if (!assignmentGroups.has(subdocumentKey)) assignmentGroups.set(subdocumentKey, []);
+      assignmentGroups.get(subdocumentKey).push(item);
+    });
   const questionsByCourseKey = new Map(
     questionMappings
       .filter((item) => String(item._id.assessmentId) === String(assessmentId))
@@ -98,7 +104,10 @@ function buildReviewSummary(counts, assessmentId, assessment, assignments = [], 
 
   summary.total = courses.length;
   summary.courses = courses.map((course) => {
-    const assignment = assignmentByCourseId.get(String(course._id));
+    const assignment = pickPrimaryAssignment([
+      ...(assignmentGroups.get(`subdocument:${String(course._id)}`) || []),
+      ...(assignmentGroups.get(getCourseKey(course)) || []),
+    ]);
     const questionMapping = questionsByCourseKey.get(`${String(course.courseName || '').toLowerCase()}|${String(course.courseId || '')}`);
     const hasQuestions = Number(course.questionCount || 0) > 0 || Number(questionMapping?.count || 0) > 0;
     const directlyMapped = hasQuestions && (!assignment || assignment.status === 'assigned');
@@ -107,6 +116,7 @@ function buildReviewSummary(counts, assessmentId, assessment, assignments = [], 
     const paperHeading = questionMapping?.paperHeadings?.filter(Boolean)?.[0] || '';
 
     if (completed) summary.completed += 1;
+    if (Object.prototype.hasOwnProperty.call(summary, status)) summary[status] += 1;
 
     return {
       courseSubdocumentId: course._id,
@@ -123,11 +133,6 @@ function buildReviewSummary(counts, assessmentId, assessment, assignments = [], 
     };
   });
 
-  counts
-    .filter((item) => String(item._id.assessmentId) === String(assessmentId))
-    .forEach((item) => {
-      summary[item._id.status] = item.count;
-    });
   summary.progressPercent = summary.total > 0 ? Math.round((summary.completed / summary.total) * 100) : 0;
   summary.readyToPublish = summary.total > 0 && summary.completed === summary.total;
   return summary;
@@ -647,6 +652,132 @@ router.patch('/:id/status', requirePermission('assessment.complete'), async (req
         operationalStatus: deriveOperationalStatus(assessment),
         reviewSummary: await getReviewSummary(assessment._id),
       },
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.post('/:id/assignments/restart-course', requirePermission('assessment.review.send'), async (req, res, next) => {
+  try {
+    const assessment = await findScopedAssessment(req);
+
+    if (!assessment) {
+      return res.status(404).json({ message: 'Assessment not found.' });
+    }
+
+    const courseSubdocumentId = String(req.body.courseSubdocumentId || '').trim();
+    const bodyCourseKey = req.body.course ? getCourseKey(req.body.course) : '';
+    const course = (assessment.courses || []).find((item) =>
+      String(item._id) === courseSubdocumentId || (bodyCourseKey && getCourseKey(item) === bodyCourseKey)
+    );
+
+    if (!course) {
+      return res.status(404).json({ message: 'Course was not found on this assessment.' });
+    }
+
+    if (!course.facultyId || !course.moderatorId) {
+      return res.status(400).json({ message: 'Assign faculty and moderator before restarting this course review.' });
+    }
+
+    assessment.status = 'review';
+    assessment.visibility = 'hidden';
+    assessment.updatedBy = req.user._id;
+    await assessment.save();
+
+    const restartMessage = String(req.body.message || '').trim();
+    await syncAssessmentAssignments(assessment, req.user, { restartCourseKeys: [getCourseKey(course)], restartMessage });
+
+    await writeAuditLog(req, {
+      action: 'assessment.assignment.restart',
+      targetType: 'Assessment',
+      targetId: assessment._id,
+      newValue: {
+        courseName: course.courseName,
+        courseId: course.courseId,
+      },
+    });
+
+    return res.json({
+      assessment: {
+        ...assessment.toObject(),
+        operationalStatus: deriveOperationalStatus(assessment),
+        reviewSummary: await getReviewSummary(assessment._id),
+      },
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.get('/:id/assignments/passwords', requirePermission('assessment.view'), async (req, res, next) => {
+  try {
+    const assessment = await findScopedAssessment(req);
+
+    if (!assessment) {
+      return res.status(404).json({ message: 'Assessment not found.' });
+    }
+
+    const assignments = await AssessmentAssignment.find({ assessmentId: assessment._id })
+      .select('+passwordPreview')
+      .populate('facultyId', 'name email')
+      .populate('moderatorId', 'name email')
+      .sort({ updatedAt: -1 });
+
+    const grouped = new Map();
+    assignments.forEach((assignment) => {
+      const courseKey = assignment.courseKey || getCourseKey(assignment);
+      if (!grouped.has(courseKey)) grouped.set(courseKey, []);
+      grouped.get(courseKey).push(assignment);
+    });
+
+    const items = (assessment.courses || []).map((course) => {
+      const assignment = pickPrimaryAssignment(grouped.get(getCourseKey(course)) || []);
+      return {
+        courseSubdocumentId: course._id,
+        courseName: course.courseName,
+        courseId: course.courseId,
+        faculty: assignment?.facultyId ? {
+          id: assignment.facultyId._id,
+          name: assignment.facultyId.name,
+          email: assignment.facultyId.email,
+        } : course.facultyId ? {
+          id: course.facultyId,
+          name: course.facultyName,
+          email: course.facultyEmail,
+        } : null,
+        moderator: assignment?.moderatorId ? {
+          id: assignment.moderatorId._id,
+          name: assignment.moderatorId.name,
+          email: assignment.moderatorId.email,
+        } : course.moderatorId ? {
+          id: course.moderatorId,
+          name: course.moderatorName,
+          email: course.moderatorEmail,
+        } : null,
+        assignmentId: assignment?._id,
+        status: assignment?.status || 'not_generated',
+        password: assignment?.passwordPreview || '',
+        facultyMail: assignment?.facultyMail || null,
+        moderatorMail: assignment?.moderatorMail || null,
+        updatedAt: assignment?.updatedAt,
+      };
+    });
+
+    await writeAuditLog(req, {
+      action: 'assessment.assignment.password.view',
+      targetType: 'Assessment',
+      targetId: assessment._id,
+      newValue: { assignmentCount: items.filter((item) => item.assignmentId).length },
+    });
+
+    return res.json({
+      assessment: {
+        _id: assessment._id,
+        title: assessment.title,
+        assessmentCode: assessment.assessmentCode,
+      },
+      items,
     });
   } catch (error) {
     return next(error);

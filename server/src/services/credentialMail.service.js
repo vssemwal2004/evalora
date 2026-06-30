@@ -38,6 +38,46 @@ function formatDateTime(value) {
   });
 }
 
+function escapeHtml(value) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+function appendHtmlBeforeClose(html, block) {
+  const source = String(html || '');
+  if (/<\/body>/i.test(source)) {
+    return source.replace(/<\/body>/i, `${block}</body>`);
+  }
+  return `${source}${block}`;
+}
+
+function ensureAssignmentPasswordInEmail(email, password, label = 'Assignment Password') {
+  if (!password) return email;
+
+  const passwordText = String(password);
+  const nextEmail = { ...email };
+
+  if (!String(nextEmail.text || '').includes(passwordText)) {
+    nextEmail.text = `${String(nextEmail.text || '').trim()}\n\n${label}: ${passwordText}`.trim();
+  }
+
+  if (!String(nextEmail.html || '').includes(passwordText)) {
+    const block = `
+      <div style="margin:18px 0;padding:14px 16px;border:1px solid #fed7aa;border-radius:12px;background:#fff7ed;">
+        <div style="margin:0 0 6px;font-size:12px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:#c2410c;">Secure access</div>
+        <div style="font-size:14px;color:#334155;">${escapeHtml(label)}</div>
+        <div style="margin-top:4px;font-size:20px;line-height:1.2;font-weight:800;color:#0f172a;letter-spacing:.04em;">${escapeHtml(passwordText)}</div>
+      </div>`;
+    nextEmail.html = appendHtmlBeforeClose(nextEmail.html, block);
+  }
+
+  return nextEmail;
+}
+
 async function sendStudentCredentialMail({ assessment, student }) {
   const transport = getTransporter();
   const email = await renderEmail('student_credentials', {
@@ -130,8 +170,9 @@ async function sendStaffCredentialMail({ person, label }) {
 async function sendAssignmentMail({ assignment, assessment, recipient, assignedBy, kind, reason }) {
   const transport = getTransporter();
   const isRejection = kind === 'rejected';
+  const passwordLabel = kind === 'submitted' ? 'Moderator Review Password' : 'Assignment Password';
   const templateKey = isRejection ? 'assignment_rejected' : kind === 'submitted' ? 'assignment_submitted' : 'assignment_assigned';
-  const email = await renderEmail(templateKey, {
+  let email = await renderEmail(templateKey, {
     recipientName: recipient.name,
     recipientEmail: recipient.email,
     assessmentTitle: assessment.title,
@@ -144,9 +185,12 @@ async function sendAssignmentMail({ assignment, assessment, recipient, assignedB
   }, [
     { label: 'Assessment Code', value: assessment.assessmentCode },
     { label: 'Course', value: `${assignment.courseName}${assignment.courseId ? ` (${assignment.courseId})` : ''}` },
-    { label: 'Assignment Password', value: isRejection || kind === 'submitted' ? '' : assignment.passwordPreview },
+    { label: passwordLabel, value: isRejection ? '' : assignment.passwordPreview },
     { label: 'Review Reason', value: reason || '' },
   ]);
+  if (!isRejection) {
+    email = ensureAssignmentPasswordInEmail(email, assignment.passwordPreview, passwordLabel);
+  }
   await transport.sendMail({ from: env.smtp.from, to: recipient.email, subject: email.subject, text: email.text, html: email.html });
 }
 

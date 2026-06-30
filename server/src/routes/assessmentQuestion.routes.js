@@ -110,9 +110,43 @@ router.get('/', requirePermission('assessment.view'), async (req, res, next) => 
       query.type = type;
     }
 
-    const items = await AssessmentQuestion.find(query).sort({ courseName: 1, order: 1, createdAt: -1 });
+    const [items, assignments] = await Promise.all([
+      AssessmentQuestion.find(query)
+        .populate('createdBy', 'name email role')
+        .sort({ courseName: 1, sourcePaperHeading: 1, order: 1, createdAt: -1 }),
+      AssessmentAssignment.find({ assessmentId: assessment._id })
+        .populate('facultyId', 'name email')
+        .populate('moderatorId', 'name email'),
+    ]);
 
-    return res.json({ items });
+    const assignmentByKey = new Map();
+    assignments.forEach((assignment) => {
+      const courseIdKey = String(assignment.courseId || '').trim().toUpperCase();
+      const courseNameKey = String(assignment.courseName || '').trim().toLowerCase();
+      if (courseIdKey) assignmentByKey.set(`id:${courseIdKey}`, assignment);
+      if (courseNameKey) assignmentByKey.set(`name:${courseNameKey}`, assignment);
+    });
+
+    return res.json({
+      items: items.map((question) => {
+        const data = question.toObject();
+        const courseIdKey = String(question.courseId || '').trim().toUpperCase();
+        const courseNameKey = String(question.courseName || '').trim().toLowerCase();
+        const assignment = assignmentByKey.get(courseIdKey ? `id:${courseIdKey}` : '') || assignmentByKey.get(`name:${courseNameKey}`);
+
+        return {
+          ...data,
+          createdByUser: data.createdBy || null,
+          faculty: assignment?.facultyId
+            ? { _id: assignment.facultyId._id, name: assignment.facultyId.name, email: assignment.facultyId.email }
+            : null,
+          moderator: assignment?.moderatorId
+            ? { _id: assignment.moderatorId._id, name: assignment.moderatorId.name, email: assignment.moderatorId.email }
+            : null,
+          assignmentStatus: assignment?.status || '',
+        };
+      }),
+    });
   } catch (error) {
     return next(error);
   }

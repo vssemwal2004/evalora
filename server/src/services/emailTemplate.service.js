@@ -127,7 +127,7 @@ const DEFAULT_EMAIL_TEMPLATES = [
       '<p>Hello <b>{{recipientName}}</b>,</p><p>The question set for <b>{{courseName}}</b> is ready for moderation.</p><table style="width:100%;border-collapse:collapse;margin:18px 0;">{{credentialRows}}</table><p>Open the review queue to approve or return corrections.</p>',
       'Open Review Queue'
     ),
-    text: 'Hello {{recipientName}},\n\nThe question set for {{courseName}} is ready for moderation.\nAssessment Code: {{assessmentCode}}\nCourse: {{courseName}} {{courseId}}\n\nOpen the review queue to approve or return corrections.',
+    text: 'Hello {{recipientName}},\n\nThe question set for {{courseName}} is ready for moderation.\nAssessment Code: {{assessmentCode}}\nCourse: {{courseName}} {{courseId}}\nAssignment Password: {{password}}\n\nOpen the review queue to approve or return corrections.',
   },
   {
     key: 'assignment_rejected',

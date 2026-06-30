@@ -1,18 +1,24 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { readSheet } from 'read-excel-file/browser';
 import {
+  Activity,
+  BarChart3,
   CheckCircle2,
+  ClipboardList,
   Download,
   FileSpreadsheet,
+  KeyRound,
   ListFilter,
   Mail,
   MoreVertical,
   Pencil,
   Eye,
   EyeOff,
+  RefreshCw,
   Search,
   ShieldCheck,
   Trash2,
+  UserCircle,
   UploadCloud,
   UserPlus,
   UserRoundCheck,
@@ -354,6 +360,262 @@ function ManageAccessModal({ meta, type, person, isSaving, onCancel, onSave }) {
   );
 }
 
+function isStrongPassword(password) {
+  const value = String(password || '');
+  return value.length > 8 && /[A-Z]/.test(value) && /[^A-Za-z0-9]/.test(value);
+}
+
+function generateStrongPassword() {
+  const random = Math.random().toString(36).slice(2, 8);
+  const randomTail = Math.random().toString(36).slice(2, 6);
+  return `Evalora@${random.charAt(0).toUpperCase()}${random.slice(1)}${randomTail}`;
+}
+
+function ChangePasswordModal({ meta, person, isSaving, onCancel, onSave }) {
+  const [draft, setDraft] = useState({ newPassword: '', confirmPassword: '', sendMail: false });
+  const strong = isStrongPassword(draft.newPassword);
+  const matches = draft.newPassword && draft.newPassword === draft.confirmPassword;
+  const canSave = strong && matches;
+
+  function useGeneratedPassword() {
+    const password = generateStrongPassword();
+    setDraft((current) => ({ ...current, newPassword: password, confirmPassword: password }));
+  }
+
+  function submit(event) {
+    event.preventDefault();
+    if (!canSave) return;
+    onSave(person, draft);
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/45 px-4 py-6">
+      <form className="w-full max-w-lg overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl" onSubmit={submit}>
+        <div className="flex items-start gap-3 border-b border-slate-200 bg-slate-50 px-5 py-4">
+          <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-brand-100 bg-brand-50 text-brand-600">
+            <KeyRound size={20} />
+          </span>
+          <div className="min-w-0">
+            <p className="text-xs font-bold uppercase tracking-wider text-brand-600">Security</p>
+            <h2 className="mt-1 text-lg font-bold text-slate-950">Change {meta.singular} Password</h2>
+            <p className="mt-1 text-sm text-slate-500">{person.name} will be asked to change this password after login.</p>
+          </div>
+        </div>
+
+        <div className="space-y-4 p-5">
+          <button className="secondary-button h-9 text-xs" type="button" onClick={useGeneratedPassword}>
+            <RefreshCw size={15} />
+            Generate strong password
+          </button>
+
+          <div>
+            <label className="field-label">New password</label>
+            <input
+              className="field-input mt-2 font-mono"
+              type="text"
+              value={draft.newPassword}
+              onChange={(event) => setDraft((current) => ({ ...current, newPassword: event.target.value }))}
+              placeholder="More than 8 chars, 1 capital, 1 special"
+              autoFocus
+            />
+          </div>
+
+          <div>
+            <label className="field-label">Confirm password</label>
+            <input
+              className="field-input mt-2 font-mono"
+              type="text"
+              value={draft.confirmPassword}
+              onChange={(event) => setDraft((current) => ({ ...current, confirmPassword: event.target.value }))}
+              placeholder="Repeat password"
+            />
+          </div>
+
+          <div className="grid gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs font-semibold">
+            <div className={`flex items-center justify-between ${strong ? 'text-green-700' : 'text-red-700'}`}>
+              <span>Strong password</span>
+              <span>{strong ? 'Ready' : 'Required'}</span>
+            </div>
+            <div className={`flex items-center justify-between ${matches ? 'text-green-700' : 'text-red-700'}`}>
+              <span>Password match</span>
+              <span>{matches ? 'Matched' : 'Required'}</span>
+            </div>
+          </div>
+
+          <label className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white p-3 text-sm font-semibold text-slate-700">
+            <input
+              className="h-4 w-4 accent-orange-500"
+              type="checkbox"
+              checked={draft.sendMail}
+              onChange={(event) => setDraft((current) => ({ ...current, sendMail: event.target.checked }))}
+            />
+            Send credential mail after changing password
+          </label>
+        </div>
+
+        <div className="flex justify-end gap-2 border-t border-slate-200 bg-slate-50 px-5 py-4">
+          <button className="secondary-button" type="button" onClick={onCancel}>Cancel</button>
+          <button className="primary-button" type="submit" disabled={isSaving || !canSave}>
+            <KeyRound size={16} />
+            {isSaving ? 'Updating...' : 'Update Password'}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function formatDateTime(value) {
+  return value ? new Date(value).toLocaleString() : 'Never';
+}
+
+function compactActionLabel(action) {
+  return String(action || 'Activity')
+    .replace(/\./g, ' ')
+    .replace(/[_-]/g, ' ')
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function StaffProfileModal({ meta, profile, roleBase, onClose }) {
+  const person = profile?.person || {};
+  const metrics = profile?.metrics || {};
+  const assignments = profile?.assignments || [];
+  const activity = profile?.activity || [];
+
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/45 px-4 py-6">
+      <div className="flex max-h-[88vh] w-full max-w-6xl flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl">
+        <div className="flex items-start justify-between gap-3 border-b border-slate-200 bg-slate-50 px-5 py-4">
+          <div className="flex min-w-0 items-start gap-3">
+            <span className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-brand-100 bg-brand-50 text-brand-600">
+              <UserCircle size={24} />
+            </span>
+            <div className="min-w-0">
+              <p className="text-xs font-bold uppercase tracking-wider text-brand-600">{meta.singular} Profile</p>
+              <h2 className="mt-1 truncate text-xl font-bold text-slate-950">{person.name}</h2>
+              <p className="mt-1 text-sm font-semibold text-slate-500">{person.email}</p>
+            </div>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            <a className="secondary-button h-9 px-3 text-xs" href={`${roleBase}/activity`}>
+              <Activity size={15} />
+              Activity Log
+            </a>
+            <button className="secondary-button h-9 px-3 text-xs" type="button" onClick={onClose}>Close</button>
+          </div>
+        </div>
+
+        <div className="overflow-y-auto p-5">
+          <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
+            {[
+              ['Assigned', metrics.totalAssigned || 0, 'text-slate-950'],
+              ['Active', metrics.active || 0, 'text-sky-700'],
+              ['Completed', metrics.completed || 0, 'text-green-700'],
+              ['In Review', metrics.waitingReview || 0, 'text-violet-700'],
+              ['Rejected', metrics.rejected || 0, 'text-red-700'],
+              ['Courses', metrics.courses || 0, 'text-brand-700'],
+            ].map(([label, value, color]) => (
+              <div key={label} className="rounded-lg border border-slate-200 bg-white p-3">
+                <p className="text-[11px] font-bold uppercase text-slate-500">{label}</p>
+                <p className={`mt-1 text-2xl font-bold ${color}`}>{value}</p>
+              </div>
+            ))}
+          </div>
+
+          <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+            <div className="space-y-4">
+              <section className="overflow-hidden rounded-lg border border-slate-200 bg-white">
+                <div className="flex items-center gap-2 border-b border-slate-200 bg-slate-50 px-4 py-3">
+                  <ClipboardList size={16} className="text-brand-600" />
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-950">Assigned Assessments</h3>
+                    <p className="text-xs text-slate-500">Latest course-level work for this {meta.singular.toLowerCase()}.</p>
+                  </div>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[760px] text-left text-sm">
+                    <thead className="bg-white text-[11px] font-bold uppercase text-slate-500">
+                      <tr>
+                        <th className="px-4 py-3">Assessment</th>
+                        <th className="px-4 py-3">Course</th>
+                        <th className="px-4 py-3">Status</th>
+                        <th className="px-4 py-3">Updated</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-200">
+                      {assignments.length === 0 ? (
+                        <tr><td className="px-4 py-8 text-center text-sm font-semibold text-slate-500" colSpan={4}>No assigned assessments yet.</td></tr>
+                      ) : assignments.map((assignment) => (
+                        <tr key={assignment.id}>
+                          <td className="px-4 py-3">
+                            <p className="font-bold text-slate-950">{assignment.assessmentTitle}</p>
+                            <p className="mt-0.5 text-xs font-semibold text-slate-500">{assignment.assessmentCode}</p>
+                          </td>
+                          <td className="px-4 py-3">
+                            <p className="font-semibold text-slate-800">{assignment.courseName}</p>
+                            <p className="mt-0.5 text-xs text-slate-500">{assignment.courseId || '-'}</p>
+                          </td>
+                          <td className="px-4 py-3">
+                            <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-1 text-xs font-bold capitalize text-slate-700">{String(assignment.status || '').replace(/_/g, ' ')}</span>
+                          </td>
+                          <td className="px-4 py-3 text-xs font-semibold text-slate-500">{formatDateTime(assignment.updatedAt)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+            </div>
+
+            <div className="space-y-4">
+              <section className="rounded-lg border border-slate-200 bg-white">
+                <div className="flex items-center gap-2 border-b border-slate-200 bg-slate-50 px-4 py-3">
+                  <BarChart3 size={16} className="text-brand-600" />
+                  <h3 className="text-sm font-bold text-slate-950">Account Details</h3>
+                </div>
+                <div className="grid gap-3 p-4 text-sm">
+                  <p><span className="block text-xs font-bold uppercase text-slate-400">Status</span><span className={statusClass(person.status)}>{person.status}</span></p>
+                  <p><span className="block text-xs font-bold uppercase text-slate-400">Login ID</span><span className="font-semibold text-slate-800">{person.loginId || person.email}</span></p>
+                  <p><span className="block text-xs font-bold uppercase text-slate-400">Last login</span><span className="font-semibold text-slate-800">{formatDateTime(person.lastLoginAt)}</span></p>
+                  <p><span className="block text-xs font-bold uppercase text-slate-400">Created</span><span className="font-semibold text-slate-800">{formatDateTime(person.createdAt)}</span></p>
+                  <div>
+                    <span className="block text-xs font-bold uppercase text-slate-400">Assigned courses</span>
+                    <p className="mt-1 text-xs leading-5 text-slate-600">{formatCourses(person.assignedCourses) || 'No courses assigned'}</p>
+                  </div>
+                </div>
+              </section>
+
+              <section className="rounded-lg border border-slate-200 bg-white">
+                <div className="flex items-center gap-2 border-b border-slate-200 bg-slate-50 px-4 py-3">
+                  <Activity size={16} className="text-brand-600" />
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-950">Recent Activity</h3>
+                    <p className="text-xs text-slate-500">Last {profile?.retentionDays || 10} days.</p>
+                  </div>
+                </div>
+                <div className="max-h-80 overflow-y-auto p-3">
+                  {activity.length === 0 ? (
+                    <p className="rounded-lg border border-slate-200 bg-slate-50 p-4 text-center text-sm font-semibold text-slate-500">No activity found.</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {activity.map((log) => (
+                        <div key={log.id} className="rounded-lg border border-slate-200 bg-white p-3">
+                          <p className="text-sm font-bold text-slate-900">{compactActionLabel(log.action)}</p>
+                          <p className="mt-1 text-xs font-semibold text-slate-500">{formatDateTime(log.createdAt)}</p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </section>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function usePeopleData(meta) {
   const [courses, setCourses] = useState([]);
   const [items, setItems] = useState([]);
@@ -665,11 +927,17 @@ function ViewPeoplePage({ type }) {
   const meta = roleMeta[type];
   const { user } = useAuth();
   const Icon = meta.icon;
+  const roleBase = user.role === 'super_admin' ? '/super-admin' : '/admin';
+  const profilePermission = type === 'faculty' ? 'faculty.profile.view' : 'moderator.profile.view';
+  const canViewProfile = user.role === 'super_admin' || user.permissions.includes(profilePermission);
   const { courses, items, error, setError, notice, setNotice, isLoading, loadItems } = usePeopleData(meta);
   const [search, setSearch] = useState('');
   const [openMenu, setOpenMenu] = useState(null);
   const [editPerson, setEditPerson] = useState(null);
   const [accessPerson, setAccessPerson] = useState(null);
+  const [passwordPerson, setPasswordPerson] = useState(null);
+  const [profile, setProfile] = useState(null);
+  const [isProfileLoading, setIsProfileLoading] = useState(false);
   const [visiblePasswords, setVisiblePasswords] = useState([]);
   const [isSaving, setIsSaving] = useState(false);
 
@@ -735,6 +1003,40 @@ function ViewPeoplePage({ type }) {
     }
   }
 
+  async function savePassword(person, draft) {
+    setIsSaving(true);
+    setError('');
+    setNotice('');
+    try {
+      const response = await api.patch(`/people/${meta.kind}/${person._id}/password`, {
+        newPassword: draft.newPassword,
+        confirmPassword: draft.confirmPassword,
+        sendMail: draft.sendMail,
+      });
+      setPasswordPerson(null);
+      await loadItems(search);
+      setVisiblePasswords((current) => Array.from(new Set([...current, person._id])));
+      setNotice(response.data.message || `${meta.singular} password updated.`);
+    } catch (requestError) {
+      setError(requestError.response?.data?.message || 'Unable to update password.');
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  async function openProfile(person) {
+    setIsProfileLoading(true);
+    setError('');
+    try {
+      const response = await api.get(`/people/${meta.kind}/${person._id}/profile`);
+      setProfile(response.data);
+    } catch (requestError) {
+      setError(requestError.response?.data?.message || `Unable to load ${meta.singular.toLowerCase()} profile.`);
+    } finally {
+      setIsProfileLoading(false);
+    }
+  }
+
   async function updateStatus(person, status) {
     if (!window.confirm(`Mark ${person.name} as ${status}?`)) return;
     setError('');
@@ -770,7 +1072,7 @@ function ViewPeoplePage({ type }) {
   function openActionMenu(event, person) {
     const rect = event.currentTarget.getBoundingClientRect();
     const menuWidth = 192;
-    const top = Math.min(rect.bottom + 6, window.innerHeight - 190);
+    const top = Math.min(rect.bottom + 6, window.innerHeight - 288);
     const left = Math.max(12, Math.min(rect.right - menuWidth, window.innerWidth - menuWidth - 12));
     setOpenMenu((current) => (current?.id === person._id ? null : { id: person._id, person, top, left }));
   }
@@ -890,6 +1192,24 @@ function ViewPeoplePage({ type }) {
 
       {accessPerson ? <ManageAccessModal meta={meta} type={type} person={accessPerson} isSaving={isSaving} onCancel={() => setAccessPerson(null)} onSave={saveAccess} /> : null}
 
+      {passwordPerson ? (
+        <ChangePasswordModal
+          meta={meta}
+          person={passwordPerson}
+          isSaving={isSaving}
+          onCancel={() => setPasswordPerson(null)}
+          onSave={savePassword}
+        />
+      ) : null}
+
+      {isProfileLoading ? (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/35 p-4">
+          <div className="rounded-xl border border-slate-200 bg-white px-6 py-5 text-sm font-bold text-slate-600 shadow-2xl">Loading profile...</div>
+        </div>
+      ) : null}
+
+      {profile ? <StaffProfileModal meta={meta} profile={profile} roleBase={roleBase} onClose={() => setProfile(null)} /> : null}
+
       {openMenu ? (
         <>
           <button className="fixed inset-0 z-40 cursor-default bg-transparent" type="button" aria-label="Close actions" onClick={closeActionMenu} />
@@ -897,12 +1217,18 @@ function ViewPeoplePage({ type }) {
             className="fixed z-50 w-48 rounded-md border border-slate-200 bg-white p-1 text-left shadow-xl"
             style={{ top: openMenu.top, left: openMenu.left }}
           >
+            {canViewProfile ? <button className="flex w-full items-center gap-2 rounded px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50" type="button" onClick={() => { openProfile(openMenu.person); closeActionMenu(); }}>
+              <UserCircle size={14} /> View Profile
+            </button> : null}
             <button className="flex w-full items-center gap-2 rounded px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50" type="button" onClick={() => { setEditPerson(openMenu.person); closeActionMenu(); }}>
               <Pencil size={14} /> Edit
             </button>
             {user.role === 'super_admin' ? <button className="flex w-full items-center gap-2 rounded px-3 py-2 text-sm font-semibold text-brand-700 hover:bg-brand-50" type="button" onClick={() => { setAccessPerson(openMenu.person); closeActionMenu(); }}>
               <ShieldCheck size={14} /> Manage Access
             </button> : null}
+            <button className="flex w-full items-center gap-2 rounded px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50" type="button" onClick={() => { setPasswordPerson(openMenu.person); closeActionMenu(); }}>
+              <KeyRound size={14} /> Change Password
+            </button>
             <button className="flex w-full items-center gap-2 rounded px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50" type="button" onClick={() => { sendMail(openMenu.person); closeActionMenu(); }}>
               <Mail size={14} /> Send Mail
             </button>

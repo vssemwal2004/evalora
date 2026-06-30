@@ -1,4 +1,6 @@
 const express = require('express');
+const AssessmentAssignment = require('../models/AssessmentAssignment');
+const AuditLog = require('../models/AuditLog');
 const Course = require('../models/Course');
 const User = require('../models/User');
 const { ROLES } = require('../constants/roles');
@@ -21,6 +23,7 @@ const roleConfig = {
     label: 'Faculty',
     viewPermission: 'faculty.view',
     viewAllPermission: 'faculty.view.all',
+    profilePermission: 'faculty.profile.view',
     createPermission: 'faculty.create',
     editPermission: 'faculty.edit',
     removePermission: 'faculty.remove',
@@ -30,6 +33,7 @@ const roleConfig = {
     label: 'Moderator',
     viewPermission: 'moderator.view',
     viewAllPermission: 'moderator.view.all',
+    profilePermission: 'moderator.profile.view',
     createPermission: 'moderator.create',
     editPermission: 'moderator.edit',
     removePermission: 'moderator.remove',
@@ -73,6 +77,11 @@ function normalizeEmail(value) {
 
 function normalizeCourseCode(value) {
   return String(value || '').trim().toUpperCase();
+}
+
+function isStrongPassword(password) {
+  const value = String(password || '');
+  return value.length > 8 && /[A-Z]/.test(value) && /[^A-Za-z0-9]/.test(value);
 }
 
 function normalizeCourseRows(value) {
@@ -398,6 +407,101 @@ router.post('/:kind/bulk-save', async (req, res, next) => {
   }
 });
 
+function serializeAssignmentProfile(assignment) {
+  const assessment = assignment.assessmentId;
+  return {
+    id: assignment._id,
+    assessmentId: assessment?._id,
+    assessmentTitle: assessment?.title || 'Assessment',
+    assessmentCode: assessment?.assessmentCode || '',
+    assessmentStatus: assessment?.status || '',
+    courseName: assignment.courseName,
+    courseId: assignment.courseId,
+    status: assignment.status,
+    facultyMail: assignment.facultyMail,
+    moderatorMail: assignment.moderatorMail,
+    submittedAt: assignment.submittedAt,
+    reviewedAt: assignment.reviewedAt,
+    updatedAt: assignment.updatedAt,
+  };
+}
+
+function serializeProfileLog(log) {
+  return {
+    id: log._id,
+    action: log.action,
+    targetType: log.targetType,
+    reason: log.reason,
+    newValue: log.newValue,
+    oldValue: log.oldValue,
+    createdAt: log.createdAt,
+  };
+}
+
+router.get('/:kind/:id/profile', async (req, res, next) => {
+  try {
+    const config = getConfig(req, res);
+    if (!config) return;
+    if (!canSupervise(req, config.profilePermission)) {
+      return res.status(403).json({ message: `You do not have permission to view ${config.label.toLowerCase()} profiles.` });
+    }
+
+    const person = await User.findOne({ _id: req.params.id, role: config.role, ...getReadScope(req, config) }).select('+passwordPreview');
+    if (!person) return res.status(404).json({ message: `${config.label} not found.` });
+
+    const assignmentField = config.role === ROLES.FACULTY ? 'facultyId' : 'moderatorId';
+    const since = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000);
+    const [assignments, activity] = await Promise.all([
+      AssessmentAssignment.find({ [assignmentField]: person._id })
+        .populate('assessmentId', 'title assessmentCode status startAt endAt')
+        .sort({ updatedAt: -1 })
+        .limit(50),
+      AuditLog.find({
+        createdAt: { $gte: since },
+        action: { $not: { $regex: '^request\\.' } },
+        $or: [
+          { actorId: person._id },
+          { targetId: person._id },
+        ],
+      })
+        .sort({ createdAt: -1 })
+        .limit(12),
+    ]);
+
+    const statusCounts = assignments.reduce((acc, assignment) => {
+      acc[assignment.status] = (acc[assignment.status] || 0) + 1;
+      return acc;
+    }, {});
+
+    const metrics = {
+      totalAssigned: assignments.length,
+      active: (statusCounts.assigned || 0) + (statusCounts.in_progress || 0) + (statusCounts.submitted || 0) + (statusCounts.rejected || 0),
+      completed: statusCounts.approved || 0,
+      waitingReview: statusCounts.submitted || 0,
+      rejected: statusCounts.rejected || 0,
+      courses: (person.assignedCourses || []).length,
+    };
+
+    await writeAuditLog(req, {
+      action: `${req.params.kind}.profile.view`,
+      targetType: 'User',
+      targetId: person._id,
+      newValue: { name: person.name, email: person.email },
+    });
+
+    return res.json({
+      person: serializePerson(person, true),
+      metrics,
+      statusCounts,
+      assignments: assignments.map(serializeAssignmentProfile),
+      activity: activity.map(serializeProfileLog),
+      retentionDays: 10,
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
 router.patch('/:kind/:id', async (req, res, next) => {
   try {
     const config = getConfig(req, res);
@@ -452,6 +556,75 @@ router.patch('/:kind/:id', async (req, res, next) => {
     });
 
     return res.json({ person: serializePerson(person, true) });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.patch('/:kind/:id/password', async (req, res, next) => {
+  try {
+    const config = getConfig(req, res);
+    if (!config) return;
+    if (!canSupervise(req, config.editPermission)) {
+      return res.status(403).json({ message: 'You do not have permission to change this password.' });
+    }
+
+    const person = await User.findOne({ _id: req.params.id, role: config.role, ...getReadScope(req, config) }).select('+passwordPreview');
+    if (!person) return res.status(404).json({ message: `${config.label} not found.` });
+
+    const shouldGenerate = Boolean(req.body.generate);
+    const newPassword = shouldGenerate ? generatePassword(12) : String(req.body.newPassword || '');
+    const confirmPassword = shouldGenerate ? newPassword : String(req.body.confirmPassword || '');
+
+    if (!newPassword || !confirmPassword) {
+      return res.status(400).json({ message: 'New password and confirm password are required.' });
+    }
+
+    if (newPassword !== confirmPassword) {
+      return res.status(400).json({ message: 'New password and confirm password do not match.' });
+    }
+
+    if (!isStrongPassword(newPassword)) {
+      return res.status(400).json({
+        message: 'Use a strong password with more than 8 characters, 1 capital letter, and 1 special character.',
+      });
+    }
+
+    person.passwordHash = await User.hashPassword(newPassword);
+    person.passwordPreview = newPassword;
+    person.mustChangePassword = true;
+    person.passwordChangedAt = undefined;
+    await person.save();
+
+    let mailStatus = 'not_sent';
+    let mailError = '';
+    if (req.body.sendMail) {
+      try {
+        await sendStaffCredentialMail({ person, label: config.label });
+        mailStatus = 'sent';
+      } catch (error) {
+        mailStatus = 'failed';
+        mailError = error.message || 'Mail failed.';
+      }
+    }
+
+    await writeAuditLog(req, {
+      action: `${req.params.kind}.password.update`,
+      targetType: 'User',
+      targetId: person._id,
+      newValue: { email: person.email, mustChangePassword: true, mailStatus },
+    });
+
+    return res.json({
+      person: {
+        ...serializePerson(person, true),
+        mailStatus,
+        mailError,
+      },
+      message: `${config.label} password updated.${
+        mailStatus === 'sent' ? ' Credential mail sent.' : mailStatus === 'failed' ? ' Mail failed, but the new password was saved.' : ''
+      }`,
+    });
   } catch (error) {
     return next(error);
   }
