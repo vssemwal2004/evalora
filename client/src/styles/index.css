@@ -70,8 +70,10 @@ textarea {
   }
 
   body.proctor-live-focus .ops-shell-proctor > div > main {
-    min-height: 100vh;
-    padding: 0.75rem !important;
+    height: 100vh;
+    min-height: 0;
+    overflow: hidden;
+    padding: 0.5rem !important;
   }
 
   .brand-loader-mark {

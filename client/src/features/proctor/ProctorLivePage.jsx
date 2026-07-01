@@ -4,11 +4,14 @@ import {
   AlertTriangle,
   ArrowLeft,
   CalendarClock,
+  ChevronDown,
   CheckCircle2,
   Eye,
   KeyRound,
   MessageSquare,
+  Minus,
   Monitor,
+  Plus,
   Search,
   Send,
   ShieldAlert,
@@ -51,16 +54,70 @@ function statusBadge(status) {
   return <span className={`status-badge ${tone}`}>{value}</span>;
 }
 
+const CLOSED_STUDENT_STATUSES = ['submitted', 'ufm', 'blocked'];
+const STALE_HEARTBEAT_MS = 75000;
+
+function getStudentRuntime(student, now = Date.now()) {
+  const examStatus = String(student?.examStatus || 'not_started');
+  const attemptStatus = String(student?.attemptStatus || 'not_started');
+  const isClosed = CLOSED_STUDENT_STATUSES.includes(examStatus) || CLOSED_STUDENT_STATUSES.includes(attemptStatus);
+  const isInProgress = examStatus === 'in_progress' || attemptStatus === 'in_progress';
+  const heartbeatAt = student?.lastHeartbeatAt ? new Date(student.lastHeartbeatAt).getTime() : 0;
+  const heartbeatIsValid = heartbeatAt && !Number.isNaN(heartbeatAt);
+  const isStale = !isClosed && isInProgress && (!heartbeatIsValid || now - heartbeatAt > STALE_HEARTBEAT_MS);
+
+  if (examStatus === 'submitted' || attemptStatus === 'submitted') {
+    return { label: 'submitted', badgeStatus: 'submitted', isLive: false, isClosed: true, isStale: false };
+  }
+  if (examStatus === 'ufm' || attemptStatus === 'ufm') {
+    return { label: 'ufm review', badgeStatus: 'ufm', isLive: false, isClosed: true, isStale: false };
+  }
+  if (examStatus === 'blocked' || attemptStatus === 'blocked') {
+    return { label: 'blocked', badgeStatus: 'blocked', isLive: false, isClosed: true, isStale: false };
+  }
+  if (isStale) {
+    return { label: 'connection lost', badgeStatus: 'connection_lost', isLive: false, isClosed: false, isStale: true };
+  }
+  if (isInProgress) {
+    return { label: 'in progress', badgeStatus: 'in_progress', isLive: true, isClosed: false, isStale: false };
+  }
+  return { label: examStatus.replace(/_/g, ' '), badgeStatus: examStatus, isLive: false, isClosed: false, isStale: false };
+}
+
+function runtimeBadge(student, now) {
+  const runtime = getStudentRuntime(student, now);
+  if (runtime.isStale) {
+    return <span className="status-badge status-pending">connection lost</span>;
+  }
+  return statusBadge(runtime.badgeStatus);
+}
+
 function assessmentWindowText(item) {
   return `${formatDateTime(item.window?.startAt)} - ${formatDateTime(item.window?.endAt)}`;
 }
 
-function studentMatchesFilter(student, filter) {
-  if (filter === 'live') return student.examStatus === 'in_progress' || student.attemptStatus === 'in_progress';
+function studentMatchesFilter(student, filter, now = Date.now()) {
+  const runtime = getStudentRuntime(student, now);
+  if (filter === 'live') return runtime.isLive;
   if (filter === 'not_started') return student.examStatus === 'not_started' || student.attemptStatus === 'not_started';
   if (filter === 'flagged') return Number(student.alertCount || 0) > 0 || student.examStatus === 'ufm';
-  if (filter === 'submitted') return ['submitted', 'ufm'].includes(student.examStatus) || ['submitted', 'ufm'].includes(student.attemptStatus);
+  if (filter === 'submitted') return runtime.isClosed;
   return true;
+}
+
+function summarizeProctorStudents(students = [], now = Date.now()) {
+  return students.reduce(
+    (summary, student) => {
+      const runtime = getStudentRuntime(student, now);
+      summary.assignedStudents += 1;
+      if (runtime.isLive) summary.activeStudents += 1;
+      if (runtime.isClosed) summary.submittedStudents += 1;
+      if (student.examStatus === 'not_started' || student.attemptStatus === 'not_started') summary.notStartedStudents += 1;
+      summary.alertCount += Number(student.alertCount || 0);
+      return summary;
+    },
+    { assignedStudents: 0, activeStudents: 0, submittedStudents: 0, notStartedStudents: 0, alertCount: 0 }
+  );
 }
 
 function socketUrl() {
@@ -180,8 +237,9 @@ function AssessmentCard({ item, onOpen }) {
   );
 }
 
-function StudentCard({ student, selected, onSelect }) {
-  const isLive = student.examStatus === 'in_progress' || student.attemptStatus === 'in_progress';
+function StudentCard({ student, selected, onSelect, now }) {
+  const runtime = getStudentRuntime(student, now);
+  const isLive = runtime.isLive;
   const isFlagged = Number(student.alertCount || 0) > 0 || student.examStatus === 'ufm';
 
   return (
@@ -200,10 +258,15 @@ function StudentCard({ student, selected, onSelect }) {
         <span className={`mt-1 h-2.5 w-2.5 shrink-0 rounded-full ${isLive ? 'bg-green-500' : isFlagged ? 'bg-amber-500' : 'bg-slate-300'}`} />
       </div>
       <div className="mt-3 flex flex-wrap items-center gap-1.5">
-        {statusBadge(student.examStatus)}
+        {runtimeBadge(student, now)}
         {isFlagged ? (
           <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-bold uppercase text-amber-700">
             {student.alertCount} alert
+          </span>
+        ) : null}
+        {runtime.isStale ? (
+          <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-bold uppercase text-amber-700">
+            offline
           </span>
         ) : null}
       </div>
@@ -212,7 +275,7 @@ function StudentCard({ student, selected, onSelect }) {
         {student.courseId ? ` (${student.courseId})` : ''}
       </p>
       <div className="mt-3 flex items-center justify-between border-t border-slate-100 pt-2 text-[11px] font-bold text-slate-400">
-        <span>{Number(student.alertCount || 0)} alert(s)</span>
+        <span>{runtime.label}</span>
         <span className="text-brand-600 opacity-0 transition group-hover:opacity-100">Open</span>
       </div>
     </button>
@@ -400,6 +463,7 @@ function FocusedMonitorPage({
   assignment,
   student,
   settings,
+  runtimeNow,
   liveStatus,
   onStartLive,
   onStopLive,
@@ -414,18 +478,31 @@ function FocusedMonitorPage({
   isMarkingUfm,
 }) {
   const [ufmReason, setUfmReason] = useState('');
+  const [ufmOpen, setUfmOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
   const [screenSize, setScreenSize] = useState('medium');
+  const [alertFilter, setAlertFilter] = useState('all');
 
   if (!student) return null;
 
-  const frameHeightClass = screenSize === 'compact' ? 'min-h-[300px]' : screenSize === 'large' ? 'min-h-[560px]' : 'min-h-[430px]';
+  const screenLevels = [
+    { value: 'compact', label: 'Compact', rail: 'xl:grid-cols-[minmax(0,1fr)_360px]' },
+    { value: 'medium', label: 'Normal', rail: 'xl:grid-cols-[minmax(0,1fr)_300px]' },
+    { value: 'large', label: 'Large', rail: 'xl:grid-cols-[minmax(0,1fr)_270px]' },
+    { value: 'focus', label: 'Max', rail: 'xl:grid-cols-[minmax(0,1fr)_240px]' },
+  ];
+  const screenLevelIndex = Math.max(0, screenLevels.findIndex((level) => level.value === screenSize));
+  const screenLevel = screenLevels[screenLevelIndex] || screenLevels[1];
   const alertCount = alerts.length;
+  const criticalCount = alerts.filter((alert) => alert.severity === 'critical').length;
+  const warningCount = alerts.filter((alert) => alert.severity === 'warning').length;
+  const visibleAlerts = alertFilter === 'all' ? alerts : alerts.filter((alert) => alert.severity === alertFilter);
+  const runtime = getStudentRuntime(student, runtimeNow);
 
   return (
-    <section className="relative min-h-[calc(100vh-96px)] space-y-3 pb-20">
-      <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-4 py-2.5">
+    <section className="relative flex h-[calc(100vh-1rem)] min-h-0 flex-col gap-2 overflow-hidden">
+      <div className="shrink-0 rounded-xl border border-slate-200 bg-white shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 px-3 py-2">
           <div className="flex min-w-0 items-center gap-3">
             <button className="secondary-button h-9 px-3 text-sm" type="button" onClick={onBack} aria-label="Back to student grid">
               <ArrowLeft size={16} className="text-brand-500" />
@@ -433,7 +510,7 @@ function FocusedMonitorPage({
             </button>
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2">
-                {statusBadge(student.examStatus)}
+                {runtimeBadge(student, runtimeNow)}
                 <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-bold text-slate-600">
                   {student.examId}
                 </span>
@@ -444,11 +521,11 @@ function FocusedMonitorPage({
               </p>
             </div>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center justify-end gap-2">
             {liveStatus === 'idle' ? (
-              <button className="primary-button h-9 px-3 text-sm" type="button" onClick={() => onStartLive(student)}>
+              <button className="primary-button h-9 px-3 text-sm" type="button" disabled={runtime.isClosed} onClick={() => onStartLive(student)}>
                 <Video size={16} />
-                Open live
+                {runtime.isClosed ? 'Exam ended' : 'Open live'}
               </button>
             ) : (
               <button className="secondary-button h-9 px-3 text-sm" type="button" onClick={onStopLive}>
@@ -458,14 +535,14 @@ function FocusedMonitorPage({
           </div>
         </div>
 
-        <div className="grid gap-2 p-2.5 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="grid gap-1.5 p-2 sm:grid-cols-4">
           {[
             ['Security', student.securityScore || 0, Number(student.securityScore || 0) > 0 ? 'text-amber-700' : 'text-slate-800'],
             ['Alerts', student.alertCount || 0, Number(student.alertCount || 0) > 0 ? 'text-amber-700' : 'text-slate-800'],
-            ['Heartbeat', formatDateTime(student.lastHeartbeatAt), 'text-slate-800'],
+            ['Heartbeat', runtime.isStale ? 'Connection lost' : formatDateTime(student.lastHeartbeatAt), runtime.isStale ? 'text-amber-700' : 'text-slate-800'],
             ['Mail', String(student.mailStatus || 'not sent').replace(/_/g, ' '), 'text-slate-800'],
           ].map(([label, value, tone]) => (
-            <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5" key={label}>
+            <div className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5" key={label}>
               <p className="text-[10px] font-bold uppercase text-slate-400">{label}</p>
               <p className={`mt-1 truncate text-sm font-semibold ${tone}`}>{value}</p>
             </div>
@@ -473,9 +550,9 @@ function FocusedMonitorPage({
         </div>
       </div>
 
-      <div className="grid items-start gap-3 xl:grid-cols-[minmax(0,1fr)_320px]">
-        <div className="overflow-hidden rounded-xl border border-slate-200 bg-slate-950 shadow-sm">
-          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 px-4 py-2.5">
+      <div className={`grid min-h-0 flex-1 items-stretch gap-2 ${screenLevel.rail}`}>
+        <div className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-slate-200 bg-slate-950 shadow-sm">
+          <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-white/10 px-3 py-2">
             <div>
               <p className="text-[10px] font-bold uppercase text-slate-400">Live camera</p>
               <p className="text-sm font-semibold text-white">
@@ -483,31 +560,35 @@ function FocusedMonitorPage({
               </p>
             </div>
             <div className="flex items-center gap-2">
-              <div className="flex items-center gap-1 rounded-lg border border-white/10 bg-white/5 p-1">
-                {[
-                  ['compact', 'S'],
-                  ['medium', 'M'],
-                  ['large', 'L'],
-                ].map(([value, label]) => (
-                  <button
-                    key={value}
-                    className={`h-7 min-w-7 rounded-md px-2 text-xs font-bold transition ${
-                      screenSize === value ? 'bg-white text-slate-950' : 'text-slate-300 hover:bg-white/10'
-                    }`}
-                    type="button"
-                    title={`${value} screen`}
-                    onClick={() => setScreenSize(value)}
-                  >
-                    {label}
-                  </button>
-                ))}
+              <div className="flex items-center overflow-hidden rounded-lg border border-white/10 bg-white/5">
+                <button
+                  className="grid h-8 w-8 place-items-center text-slate-300 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:text-slate-600"
+                  type="button"
+                  aria-label="Decrease student screen size"
+                  disabled={screenLevelIndex === 0}
+                  onClick={() => setScreenSize(screenLevels[Math.max(0, screenLevelIndex - 1)].value)}
+                >
+                  <Minus size={14} />
+                </button>
+                <span className="min-w-16 border-x border-white/10 px-2 text-center text-[11px] font-bold text-white">
+                  {screenLevel.label}
+                </span>
+                <button
+                  className="grid h-8 w-8 place-items-center text-slate-300 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:text-slate-600"
+                  type="button"
+                  aria-label="Increase student screen size"
+                  disabled={screenLevelIndex === screenLevels.length - 1}
+                  onClick={() => setScreenSize(screenLevels[Math.min(screenLevels.length - 1, screenLevelIndex + 1)].value)}
+                >
+                  <Plus size={14} />
+                </button>
               </div>
               <span className={`rounded-full px-3 py-1 text-xs font-bold ${liveStatus === 'connected' ? 'bg-green-500/15 text-green-200' : 'bg-amber-500/15 text-amber-100'}`}>
                 {liveStatus}
               </span>
             </div>
           </div>
-          <div className={`relative aspect-video ${frameHeightClass} bg-slate-900 transition-all duration-200`}>
+          <div className="relative min-h-0 flex-1 bg-slate-900 transition-all duration-200">
             <video ref={remoteVideoRef} className="h-full w-full object-contain" autoPlay playsInline />
             {liveStatus !== 'connected' ? (
               <div className="absolute inset-0 grid place-items-center text-center">
@@ -520,8 +601,8 @@ function FocusedMonitorPage({
           </div>
         </div>
 
-        <aside className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm xl:sticky xl:top-3 xl:max-h-[calc(100vh-7rem)]">
-          <div className="flex items-center justify-between border-b border-slate-200 bg-slate-50 px-3 py-2.5">
+        <aside className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+          <div className="flex shrink-0 items-center justify-between border-b border-slate-200 bg-slate-50 px-3 py-2">
             <div>
               <p className="text-xs font-bold uppercase text-slate-500">Student tools</p>
               <p className="text-[11px] font-semibold text-slate-400">Identity, risk, and actions</p>
@@ -531,17 +612,17 @@ function FocusedMonitorPage({
             </span>
           </div>
 
-          <div className="max-h-[calc(100vh-11rem)] space-y-3 overflow-y-auto p-3">
+          <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-2.5">
             <section>
               <p className="text-[10px] font-bold uppercase text-slate-400">Student overview</p>
-              <div className="mt-2 grid grid-cols-2 gap-2">
+              <div className="mt-1.5 grid grid-cols-2 gap-1.5">
                 {[
                   ['Email', student.email],
                   ['Course', student.courseId || '-'],
-                  ['Status', String(student.examStatus || 'not_started').replace(/_/g, ' ')],
+                  ['Status', runtime.label],
                   ['Attempt', String(student.attemptStatus || 'not_started').replace(/_/g, ' ')],
                 ].map(([label, value]) => (
-                  <div className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-2" key={label}>
+                  <div className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5" key={label}>
                     <p className="text-[10px] font-bold uppercase text-slate-400">{label}</p>
                     <p className="mt-1 truncate text-xs font-semibold text-slate-900" title={value || '-'}>
                       {value || '-'}
@@ -552,49 +633,103 @@ function FocusedMonitorPage({
             </section>
 
             {settings.ufmActionEnabled ? (
-              <section className="rounded-lg border border-amber-200 bg-amber-50 p-3">
-                <div className="flex items-center justify-between gap-2">
-                  <label className="text-[10px] font-bold uppercase text-amber-700">UFM note</label>
-                  <span className="text-[10px] font-bold uppercase text-amber-600">Admin review</span>
-                </div>
-                <textarea
-                  className="field-input mt-2 min-h-16 bg-white text-xs"
-                  value={ufmReason}
-                  onChange={(event) => setUfmReason(event.target.value)}
-                  placeholder="Short reason visible in report"
-                />
+              <section className={`overflow-hidden rounded-lg border transition ${ufmOpen ? 'border-amber-200 bg-amber-50' : 'border-slate-200 bg-white'}`}>
                 <button
-                  className="mt-2 inline-flex h-8 w-full items-center justify-center gap-2 rounded-md bg-amber-600 px-3 text-xs font-semibold text-white transition hover:bg-amber-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                  className="flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left"
                   type="button"
-                  disabled={isMarkingUfm || !ufmReason.trim()}
-                  onClick={async () => {
-                    const ok = await onMarkUfm(student, ufmReason);
-                    if (ok) setUfmReason('');
-                  }}
+                  onClick={() => setUfmOpen((value) => !value)}
+                  aria-expanded={ufmOpen}
                 >
-                  <ShieldAlert size={13} />
-                  {isMarkingUfm ? 'Marking...' : 'Mark UFM pending'}
+                  <span className="flex min-w-0 items-center gap-2">
+                    <span className={`grid h-7 w-7 shrink-0 place-items-center rounded-lg ${ufmOpen ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-500'}`}>
+                      <ShieldAlert size={14} />
+                    </span>
+                    <span className="min-w-0">
+                      <span className="block text-xs font-bold uppercase text-slate-700">UFM note</span>
+                      <span className="block truncate text-[11px] font-semibold text-slate-400">
+                        {ufmReason ? 'Draft reason added' : 'Optional action'}
+                      </span>
+                    </span>
+                  </span>
+                  <span className="flex items-center gap-2">
+                    <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold uppercase text-amber-700">Review</span>
+                    <ChevronDown size={15} className={`text-slate-400 transition ${ufmOpen ? 'rotate-180' : ''}`} />
+                  </span>
                 </button>
+
+                {ufmOpen ? (
+                  <div className="border-t border-amber-200 px-3 pb-2.5 pt-2">
+                    <textarea
+                      className="field-input min-h-14 bg-white text-xs"
+                      value={ufmReason}
+                      onChange={(event) => setUfmReason(event.target.value)}
+                      placeholder="Short reason visible in report"
+                    />
+                    <button
+                      className="mt-2 inline-flex h-8 w-full items-center justify-center gap-2 rounded-md bg-amber-600 px-3 text-xs font-semibold text-white transition hover:bg-amber-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                      type="button"
+                      disabled={isMarkingUfm || !ufmReason.trim()}
+                      onClick={async () => {
+                        const ok = await onMarkUfm(student, ufmReason);
+                        if (ok) {
+                          setUfmReason('');
+                          setUfmOpen(false);
+                        }
+                      }}
+                    >
+                      <ShieldAlert size={13} />
+                      {isMarkingUfm ? 'Marking...' : 'Mark UFM pending'}
+                    </button>
+                  </div>
+                ) : null}
               </section>
             ) : null}
 
             <section>
-              <div className="mb-2 flex items-center justify-between">
-                <p className="text-[10px] font-bold uppercase text-slate-400">Recent alerts</p>
-                <span className="text-[10px] font-bold text-slate-400">{alertCount}</span>
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <div>
+                  <p className="text-[10px] font-bold uppercase text-slate-400">Recent alerts</p>
+                  <p className="text-[10px] font-semibold text-slate-400">{visibleAlerts.length} visible</p>
+                </div>
+                <div className="flex items-center gap-1">
+                  {[
+                    ['all', alertCount, 'All'],
+                    ['critical', criticalCount, 'C'],
+                    ['warning', warningCount, 'W'],
+                  ].map(([value, count, label]) => (
+                    <button
+                      key={value}
+                      className={`h-7 rounded-full px-2 text-[10px] font-bold transition ${
+                        alertFilter === value ? 'bg-brand-50 text-brand-700 ring-1 ring-brand-200' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+                      }`}
+                      type="button"
+                      onClick={() => setAlertFilter(value)}
+                    >
+                      {label} {count}
+                    </button>
+                  ))}
+                </div>
               </div>
-              <div className="max-h-[360px] space-y-2 overflow-y-auto pr-1">
-                {alerts.length === 0 ? (
+              <div className="space-y-1.5">
+                {visibleAlerts.length === 0 ? (
                   <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 text-xs font-semibold text-slate-400">
-                    No alerts for this student.
+                    No alerts in this view.
                   </div>
-                ) : alerts.map((alert) => (
-                  <div key={alert.id || `${alert.type}-${alert.occurredAt}`} className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                ) : visibleAlerts.map((alert) => (
+                  <div
+                    key={alert.id || `${alert.type}-${alert.occurredAt}`}
+                    className={`rounded-lg border px-2.5 py-2 ${
+                      alert.severity === 'critical' ? 'border-red-100 bg-red-50/60' : alert.severity === 'warning' ? 'border-amber-100 bg-amber-50/60' : 'border-slate-200 bg-slate-50'
+                    }`}
+                  >
                     <div className="flex items-center justify-between gap-2">
-                      <p className="truncate text-xs font-bold text-slate-800">{String(alert.type || 'activity').replace(/_/g, ' ')}</p>
+                      <div className="flex min-w-0 items-center gap-2">
+                        <span className={`h-2 w-2 shrink-0 rounded-full ${alert.severity === 'critical' ? 'bg-red-500' : alert.severity === 'warning' ? 'bg-amber-500' : 'bg-slate-400'}`} />
+                        <p className="truncate text-xs font-bold text-slate-800">{String(alert.type || 'activity').replace(/_/g, ' ')}</p>
+                      </div>
                       <span className={`shrink-0 text-[10px] font-bold uppercase ${alert.severity === 'critical' ? 'text-red-600' : 'text-amber-600'}`}>{alert.severity || 'info'}</span>
                     </div>
-                    <p className="mt-1 line-clamp-2 text-xs font-semibold text-slate-500">{alert.message || 'Activity detected'}</p>
+                    <p className="mt-1 line-clamp-1 text-xs font-semibold text-slate-500">{alert.message || 'Activity detected'}</p>
                     <p className="mt-1 text-[10px] font-semibold text-slate-400">{formatDateTime(alert.occurredAt)}</p>
                   </div>
                 ))}
@@ -678,6 +813,7 @@ export function ProctorLivePage() {
   const [liveStatus, setLiveStatus] = useState('idle');
   const [chatMessages, setChatMessages] = useState([]);
   const [chatDraft, setChatDraft] = useState('');
+  const [runtimeNow, setRuntimeNow] = useState(Date.now());
   const peerRef = useRef(null);
   const remoteVideoRef = useRef(null);
   const liveSessionRef = useRef(null);
@@ -690,6 +826,12 @@ export function ProctorLivePage() {
     if (typeof document === 'undefined') return undefined;
     document.body.classList.toggle('proctor-live-focus', Boolean(workspace));
     return () => document.body.classList.remove('proctor-live-focus');
+  }, [workspace]);
+
+  useEffect(() => {
+    if (!workspace) return undefined;
+    const interval = window.setInterval(() => setRuntimeNow(Date.now()), 15000);
+    return () => window.clearInterval(interval);
   }, [workspace]);
 
   useEffect(() => {
@@ -747,9 +889,9 @@ export function ProctorLivePage() {
     const query = studentSearch.trim().toLowerCase();
     return (workspace?.students || []).filter((student) => {
       const haystack = `${student.name} ${student.email} ${student.examId} ${student.courseName} ${student.courseId}`.toLowerCase();
-      return studentMatchesFilter(student, activeFilter) && (!query || haystack.includes(query));
+      return studentMatchesFilter(student, activeFilter, runtimeNow) && (!query || haystack.includes(query));
     });
-  }, [activeFilter, studentSearch, workspace?.students]);
+  }, [activeFilter, runtimeNow, studentSearch, workspace?.students]);
 
   useEffect(() => {
     setStudentPage(1);
@@ -781,6 +923,14 @@ export function ProctorLivePage() {
     setLiveSession(null);
     setLiveStatus('idle');
   }
+
+  useEffect(() => {
+    if (!monitorStudent) return;
+    const runtime = getStudentRuntime(monitorStudent, runtimeNow);
+    if (runtime.isClosed && liveStatus !== 'idle') {
+      closeLiveSession();
+    }
+  }, [liveStatus, monitorStudent?.attemptStatus, monitorStudent?.examStatus, monitorStudent?.id, runtimeNow]);
 
   function requestLiveStream(student) {
     if (!socketClient || !workspace?.assignment?.assignmentId || !student?.id) {
@@ -840,11 +990,20 @@ export function ProctorLivePage() {
     function upsertStudent(nextStudent) {
       setWorkspace((current) => {
         if (!current) return current;
+        const nextStudents = current.students.map((student) =>
+          String(student.id) === String(nextStudent.id) ? { ...student, ...nextStudent } : student
+        );
+        const nextSummary = summarizeProctorStudents(nextStudents);
+        setAssignments((currentAssignments) =>
+          currentAssignments.map((item) =>
+            String(item.assignmentId) === String(current.assignment.assignmentId)
+              ? { ...item, summary: { ...(item.summary || {}), ...nextSummary } }
+              : item
+          )
+        );
         return {
           ...current,
-          students: current.students.map((student) =>
-            String(student.id) === String(nextStudent.id) ? { ...student, ...nextStudent } : student
-          ),
+          students: nextStudents,
         };
       });
     }
@@ -1008,11 +1167,20 @@ export function ProctorLivePage() {
       });
       setWorkspace((current) => {
         if (!current) return current;
+        const nextStudents = current.students.map((item) =>
+          String(item.id) === String(student.id) ? { ...item, ...response.data.student } : item
+        );
+        const nextSummary = summarizeProctorStudents(nextStudents);
+        setAssignments((currentAssignments) =>
+          currentAssignments.map((item) =>
+            String(item.assignmentId) === String(current.assignment.assignmentId)
+              ? { ...item, summary: { ...(item.summary || {}), ...nextSummary } }
+              : item
+          )
+        );
         return {
           ...current,
-          students: current.students.map((item) =>
-            String(item.id) === String(student.id) ? { ...item, ...response.data.student } : item
-          ),
+          students: nextStudents,
           alerts: response.data.event ? [response.data.event, ...(current.alerts || [])].slice(0, 50) : current.alerts,
         };
       });
@@ -1042,6 +1210,7 @@ export function ProctorLivePage() {
           assignment={assignment}
           student={monitorStudent}
           settings={settings}
+          runtimeNow={runtimeNow}
           liveStatus={liveStatus}
           onStartLive={requestLiveStream}
           onStopLive={closeLiveSession}
@@ -1133,6 +1302,7 @@ export function ProctorLivePage() {
                   <StudentCard
                     key={student.id}
                     student={student}
+                    now={runtimeNow}
                     selected={String(student.id) === selectedStudentId}
                     onSelect={(nextStudent) => {
                       setSelectedStudentId(nextStudent.id);

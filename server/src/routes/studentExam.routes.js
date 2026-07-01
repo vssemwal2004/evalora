@@ -873,6 +873,7 @@ router.post('/exams/:assignmentId/submit', async (req, res, next) => {
 
     assignment.examStatus = 'submitted';
     await assignment.save();
+    await emitProctorStudentUpdate(req, { assessment, assignment, attempt });
 
     return res.json({
       submitted: true,
