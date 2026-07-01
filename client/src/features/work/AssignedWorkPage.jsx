@@ -329,19 +329,33 @@ function QuestionAnswerDetail({ question }) {
   );
 }
 
-function PasswordModal({ item, onClose, onUnlocked }) {
+function PasswordModal({ item, group, onClose, onUnlocked }) {
   const [password, setPassword] = useState(''); const [error, setError] = useState(''); const [busy, setBusy] = useState(false);
   async function unlock(event) {
     event.preventDefault(); setBusy(true); setError('');
-    try { const response = await api.post(`/work/${item._id}/unlock`, { password }); onUnlocked(response.data.token); }
+    try {
+      const itemsToUnlock = group?.items?.length ? group.items : [item];
+      const results = await Promise.allSettled(itemsToUnlock.map((workItem) => api.post(`/work/${workItem._id}/unlock`, { password })));
+      const tokenMap = {};
+      results.forEach((result, index) => {
+        if (result.status === 'fulfilled' && result.value.data?.token) {
+          tokenMap[itemsToUnlock[index]._id] = result.value.data.token;
+        }
+      });
+      if (!tokenMap[item._id]) {
+        const firstError = results.find((result) => result.status === 'rejected');
+        throw firstError?.reason || new Error('Unable to unlock assigned work.');
+      }
+      onUnlocked({ tokenMap, itemId: item._id });
+    }
     catch (requestError) { setError(requestError.response?.data?.message || 'Unable to unlock assigned work.'); }
     finally { setBusy(false); }
   }
   return <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/45 p-4">
     <form className="w-full max-w-lg overflow-hidden rounded-xl bg-white shadow-2xl" onSubmit={unlock}>
-      <div className="border-b border-slate-200 bg-slate-50 p-5"><p className="text-xs font-bold uppercase tracking-wider text-brand-600">Secure assignment</p><h2 className="mt-1 text-xl font-bold text-slate-950">{item.assessmentId.title}</h2></div>
+      <div className="border-b border-slate-200 bg-slate-50 p-5"><p className="text-xs font-bold uppercase tracking-wider text-brand-600">Secure assessment</p><h2 className="mt-1 text-xl font-bold text-slate-950">{item.assessmentId.title}</h2><p className="mt-1 text-xs font-semibold text-slate-500">{group?.counts?.total || 1} assigned course{(group?.counts?.total || 1) === 1 ? '' : 's'} will open in one workspace.</p></div>
       <div className="space-y-4 p-5">
-        <div className="grid grid-cols-2 gap-3 rounded-lg border border-slate-200 p-4 text-sm"><span className="text-slate-500">Course</span><b>{item.courseName}</b><span className="text-slate-500">Code</span><b>{item.assessmentId.assessmentCode}</b><span className="text-slate-500">Deadline</span><b>{formatDate(item.assessmentId.endAt)}</b></div>
+        <div className="grid grid-cols-2 gap-3 rounded-lg border border-slate-200 p-4 text-sm"><span className="text-slate-500">First course</span><b>{item.courseName}</b><span className="text-slate-500">Code</span><b>{item.assessmentId.assessmentCode}</b><span className="text-slate-500">Deadline</span><b>{formatDate(item.assessmentId.endAt)}</b></div>
         {item.rejectionReason ? <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm font-semibold text-red-700">Review note: {item.rejectionReason}</div> : null}
         <div><label className="field-label">Assignment password</label><div className="relative mt-2"><KeyRound className="absolute left-3 top-3 text-slate-400" size={17}/><input className="field-input pl-10" type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoFocus required placeholder="Enter password from email"/></div></div>
         {error ? <p className="text-sm font-semibold text-red-600">{error}</p> : null}
@@ -351,20 +365,166 @@ function PasswordModal({ item, onClose, onUnlocked }) {
   </div>;
 }
 
+function groupStatus(items) {
+  if (items.some((item) => item.status === 'rejected')) return 'rejected';
+  if (items.some((item) => item.status === 'submitted')) return 'submitted';
+  if (items.some((item) => ['assigned', 'in_progress'].includes(item.status))) return 'assigned';
+  if (items.every((item) => item.status === 'approved')) return 'approved';
+  return items[0]?.status || 'assigned';
+}
+
+function groupProgress(counts) {
+  const total = Math.max(Number(counts?.total || 0), 1);
+  return Math.round((Number(counts?.approved || 0) / total) * 100);
+}
+
+function groupStatusLabel(status) {
+  if (status === 'submitted') return 'In review';
+  if (status === 'approved') return 'Approved';
+  if (status === 'rejected') return 'Needs correction';
+  return 'To do';
+}
+
+function buildWorkGroups(items) {
+  const groups = new Map();
+  items.forEach((item) => {
+    const assessmentId = String(item.assessmentId?._id || item.assessmentId || '');
+    if (!assessmentId) return;
+    if (!groups.has(assessmentId)) {
+      groups.set(assessmentId, {
+        key: assessmentId,
+        assessment: item.assessmentId,
+        items: [],
+        updatedAt: item.updatedAt || item.createdAt,
+      });
+    }
+    const group = groups.get(assessmentId);
+    group.items.push(item);
+    if (new Date(item.updatedAt || item.createdAt || 0) > new Date(group.updatedAt || 0)) {
+      group.updatedAt = item.updatedAt || item.createdAt;
+    }
+  });
+
+  return Array.from(groups.values())
+    .map((group) => ({
+      ...group,
+      status: groupStatus(group.items),
+      counts: {
+        total: group.items.length,
+        pending: group.items.filter((item) => ['assigned', 'in_progress'].includes(item.status)).length,
+        review: group.items.filter((item) => item.status === 'submitted').length,
+        rejected: group.items.filter((item) => item.status === 'rejected').length,
+        approved: group.items.filter((item) => item.status === 'approved').length,
+      },
+      items: group.items.sort((a, b) => {
+        const statusDelta = ['submitted', 'rejected', 'assigned', 'in_progress', 'approved'].indexOf(a.status)
+          - ['submitted', 'rejected', 'assigned', 'in_progress', 'approved'].indexOf(b.status);
+        if (statusDelta) return statusDelta;
+        return String(a.courseName || '').localeCompare(String(b.courseName || ''));
+      }),
+    }))
+    .sort((a, b) => new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0));
+}
+
+function saveWorkContext(group, tokenMap = {}) {
+  const assessmentId = group?.key || '';
+  if (!assessmentId) return;
+  const context = {
+    assessmentId,
+    assessment: group.assessment,
+    items: group.items,
+    tokenMap,
+    savedAt: new Date().toISOString(),
+  };
+  window.sessionStorage.setItem(`evalora_work_context_${assessmentId}`, JSON.stringify(context));
+}
+
+function loadWorkContext(assessmentId) {
+  if (!assessmentId) return null;
+  try {
+    return JSON.parse(window.sessionStorage.getItem(`evalora_work_context_${assessmentId}`) || 'null');
+  } catch {
+    return null;
+  }
+}
+
+function AssessmentWorkCard({ group, isModerator, onOpen }) {
+  const progress = groupProgress(group.counts);
+  const nextCourse = group.items.find((item) => item.status === 'submitted')
+    || group.items.find((item) => item.status === 'rejected')
+    || group.items.find((item) => ['assigned', 'in_progress'].includes(item.status))
+    || group.items[0];
+
+  return (
+    <article className="grid gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm transition hover:border-brand-200 hover:shadow-md xl:grid-cols-[minmax(0,1fr)_18rem_auto] xl:items-center">
+      <div className="min-w-0">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className={statusClass(group.status)}>{groupStatusLabel(group.status)}</span>
+          <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-bold text-slate-500">
+            {group.counts.total} course{group.counts.total === 1 ? '' : 's'}
+          </span>
+          <span className="text-[11px] font-bold text-slate-400">{group.assessment?.assessmentCode}</span>
+        </div>
+        <h2 className="mt-2 truncate text-base font-bold text-slate-950">{group.assessment?.title}</h2>
+        <p className="mt-1 text-xs font-semibold text-slate-500">
+          Deadline: {formatDate(group.assessment?.endAt)}
+        </p>
+      </div>
+
+      <div className="min-w-0">
+        <div className="grid grid-cols-4 overflow-hidden rounded-lg border border-slate-200 bg-slate-50 text-center text-[11px] font-bold">
+          <span className="px-2 py-1.5 text-slate-600">Total {group.counts.total}</span>
+          <span className="border-l border-slate-200 px-2 py-1.5 text-sky-700">Review {group.counts.review}</span>
+          <span className="border-l border-slate-200 px-2 py-1.5 text-red-700">Reject {group.counts.rejected}</span>
+          <span className="border-l border-slate-200 px-2 py-1.5 text-emerald-700">Done {group.counts.approved}</span>
+        </div>
+        <div className="mt-2 flex items-center gap-2">
+          <div className="h-2 flex-1 overflow-hidden rounded-full bg-slate-200">
+            <div className="h-full rounded-full bg-brand-500" style={{ width: `${progress}%` }} />
+          </div>
+          <span className="w-10 text-right text-xs font-bold text-brand-700">{progress}%</span>
+        </div>
+      </div>
+
+      <button className="primary-button h-10 px-4 text-xs" type="button" onClick={() => onOpen(group, nextCourse)}>
+        <KeyRound size={15} />
+        {isModerator ? 'Open review' : 'Open work'}
+      </button>
+    </article>
+  );
+}
+
 export function AssignedWorkPage() {
   const { user } = useAuth(); const navigate = useNavigate(); const [items, setItems] = useState([]); const [selected, setSelected] = useState(null); const [loading, setLoading] = useState(true); const [error, setError] = useState(''); const [query, setQuery] = useState(''); const [activeTab, setActiveTab] = useState('all');
   useEffect(() => { api.get('/work').then((r) => setItems(r.data.items || [])).catch((e) => setError(e.response?.data?.message || 'Unable to load assigned work.')).finally(() => setLoading(false)); }, []);
-  const counts = useMemo(() => ({ total: items.length, pending: items.filter((x) => ['assigned','in_progress'].includes(x.status)).length, review: items.filter((x) => x.status === 'submitted').length, rejected: items.filter((x) => x.status === 'rejected').length, completed: items.filter((x) => x.status === 'approved').length }), [items]);
+  const workGroups = useMemo(() => buildWorkGroups(items), [items]);
+  const counts = useMemo(() => ({
+    total: workGroups.length,
+    pending: workGroups.filter((x) => ['assigned','in_progress'].includes(x.status)).length,
+    review: workGroups.filter((x) => x.status === 'submitted').length,
+    rejected: workGroups.filter((x) => x.status === 'rejected').length,
+    completed: workGroups.filter((x) => x.status === 'approved').length,
+  }), [workGroups]);
   const visibleItems = useMemo(() => items.filter((item) => {
     const haystack = `${item.assessmentId?.title || ''} ${item.assessmentId?.assessmentCode || ''} ${item.courseName || ''} ${item.courseId || ''} ${item.facultyId?.name || ''} ${item.moderatorId?.name || ''}`.toLowerCase();
     const matchesSearch = !query.trim() || haystack.includes(query.trim().toLowerCase());
     const matchesTab = activeTab === 'all' || workStatusGroup(item.status) === activeTab;
     return matchesSearch && matchesTab;
   }), [activeTab, items, query]);
+  const visibleGroups = useMemo(() => buildWorkGroups(visibleItems), [visibleItems]);
   const isModerator = user.role === 'moderator';
-  function opened(token) { window.sessionStorage.setItem(`evalora_work_${selected._id}`, token); navigate(`/${user.role}/work/${selected._id}`); }
+  function openGroup(group, preferredItem) {
+    setSelected({ group, item: preferredItem || group.items[0] });
+  }
+  function opened({ tokenMap, itemId }) {
+    Object.entries(tokenMap || {}).forEach(([assignmentId, token]) => {
+      window.sessionStorage.setItem(`evalora_work_${assignmentId}`, token);
+    });
+    saveWorkContext(selected.group, tokenMap);
+    navigate(`/${user.role}/work/${itemId || selected.item._id}`);
+  }
   return <section className="space-y-5">
-    <PageHeader eyebrow={isModerator ? 'Moderation' : 'Faculty workspace'} title={isModerator ? 'Assessment Review Queue' : 'Assigned Work'} description={isModerator ? 'Review question sets submitted by faculty and return precise feedback.' : 'Build and submit only the assessment content assigned to you.'}/>
+    <PageHeader eyebrow={isModerator ? 'Moderation' : 'Faculty workspace'} title={isModerator ? 'Assessment Review Queue' : 'Assigned Work'} description={isModerator ? 'Open one assessment, then review all assigned courses from a focused course navigator.' : 'Open one assessment, then complete assigned courses from a focused course navigator.'}/>
     {error ? <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm font-semibold text-red-700">{error}</div> : null}
     <div className="grid gap-2 sm:grid-cols-4">{[['To do', counts.pending, Clock3], ['In review', counts.review, MessageSquareText], ['Rejected', counts.rejected, AlertTriangle], ['Approved', counts.completed, CheckCircle2]].map(([label,value,Icon]) => <button key={label} className="rounded-lg border border-slate-200 bg-white p-3 text-left shadow-sm transition hover:border-brand-200 hover:bg-brand-50/40" type="button" onClick={() => setActiveTab(label === 'To do' ? 'pending' : label === 'In review' ? 'submitted' : label.toLowerCase())}><Icon size={16} className="text-brand-600"/><p className="mt-2 text-lg font-semibold leading-none text-slate-950">{value}</p><p className="mt-1 text-[11px] font-semibold uppercase text-slate-500">{label}</p></button>)}</div>
     <div className="panel overflow-hidden">
@@ -377,36 +537,66 @@ export function AssignedWorkPage() {
           <input className="field-input h-9 pl-9 text-sm" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search assessment, course, code" />
         </div>
       </div>
-      {loading ? <p className="p-8 text-center text-sm text-slate-500">Loading assigned work...</p> : items.length === 0 ? <EmptyState title="No assigned work" description={isModerator ? 'Faculty submissions will appear here.' : 'New assessment assignments will appear here after an admin sends review work.'}/> : visibleItems.length === 0 ? <EmptyState title="No matching work" description="Adjust search or choose another status."/> : <div className="divide-y divide-slate-100">{visibleItems.map((item) => <article key={item._id} className="grid gap-3 p-3 transition hover:bg-slate-50 xl:grid-cols-[minmax(0,1fr)_20rem_minmax(13rem,0.7fr)_auto] xl:items-center">
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-2"><span className={statusClass(item.status)}>{item.status.replace('_',' ')}</span><span className="text-[11px] font-bold text-slate-400">{item.assessmentId.assessmentCode}</span></div>
-          <h2 className="mt-1 truncate text-sm font-semibold text-slate-950">{item.assessmentId.title}</h2>
-          <p className="mt-0.5 text-xs font-semibold text-brand-700">{item.courseName}{item.courseId ? ` · ${item.courseId}` : ''}</p>
-        </div>
-        <AssignmentFlowDiagram assignment={item} compact />
-        <div className="grid gap-1 text-xs text-slate-500 sm:grid-cols-2 lg:grid-cols-1">
-          <p>Deadline: <b className="text-slate-700">{formatDate(item.assessmentId.endAt)}</b></p>
-          <p>{isModerator ? 'Submitted by' : 'Moderator'}: <b className="text-slate-700">{isModerator ? item.facultyId?.name || 'Faculty' : item.moderatorId?.name || 'Moderator'}</b></p>
-          {item.rejectionReason ? <p className="rounded bg-red-50 px-2 py-1 font-semibold text-red-700">Rejected: {item.rejectionReason}</p> : null}
-        </div>
-        <button className="primary-button h-9 px-3 text-xs" type="button" onClick={() => setSelected(item)}><KeyRound size={14}/> {isModerator ? 'Open review' : item.status === 'rejected' ? 'Correct' : 'Open'}</button>
-      </article>)}</div>}
+      {loading ? <p className="p-8 text-center text-sm text-slate-500">Loading assigned work...</p> : items.length === 0 ? <EmptyState title="No assigned work" description={isModerator ? 'Faculty submissions will appear here.' : 'New assessment assignments will appear here after an admin sends review work.'}/> : visibleGroups.length === 0 ? <EmptyState title="No matching work" description="Adjust search or choose another status."/> : <div className="grid gap-3 p-3 2xl:grid-cols-2">{visibleGroups.map((group) => (
+        <AssessmentWorkCard key={group.key} group={group} isModerator={isModerator} onOpen={openGroup} />
+      ))}</div>}
     </div>
-    {selected ? <PasswordModal item={selected} onClose={() => setSelected(null)} onUnlocked={opened}/> : null}
+    {selected ? <PasswordModal item={selected.item} group={selected.group} onClose={() => setSelected(null)} onUnlocked={opened}/> : null}
   </section>;
 }
 
 export function WorkWorkspacePage() {
   const { user } = useAuth(); const { assignmentId } = useParams(); const navigate = useNavigate();
-  const token = window.sessionStorage.getItem(`evalora_work_${assignmentId}`); const [data, setData] = useState(null); const [error, setError] = useState(''); const [editing, setEditing] = useState(null); const [filters, setFilters] = useState({ type: '', difficulty: '' }); const [expandedFolder, setExpandedFolder] = useState(''); const [expanded, setExpanded] = useState(''); const [rejecting, setRejecting] = useState(false); const [confirmSubmit, setConfirmSubmit] = useState(false); const [showRestartNotice, setShowRestartNotice] = useState(true); const [submitMessage, setSubmitMessage] = useState(''); const [reason, setReason] = useState(''); const [busy, setBusy] = useState(false);
+  const token = window.sessionStorage.getItem(`evalora_work_${assignmentId}`); const [data, setData] = useState(null); const [workContext, setWorkContext] = useState(null); const [error, setError] = useState(''); const [editing, setEditing] = useState(null); const [filters, setFilters] = useState({ type: '', difficulty: '' }); const [courseQuery, setCourseQuery] = useState(''); const [courseFilter, setCourseFilter] = useState('all'); const [expandedFolder, setExpandedFolder] = useState(''); const [expanded, setExpanded] = useState(''); const [rejecting, setRejecting] = useState(false); const [confirmSubmit, setConfirmSubmit] = useState(false); const [showRestartNotice, setShowRestartNotice] = useState(true); const [submitMessage, setSubmitMessage] = useState(''); const [reason, setReason] = useState(''); const [busy, setBusy] = useState(false);
   const headers = token ? { 'x-assignment-token': token } : {};
-  async function load() { if (!token) return navigate(`/${user.role}`, { replace: true }); try { const r = await api.get(`/work/${assignmentId}/details`, { headers }); setData(r.data); } catch (e) { setError(e.response?.data?.message || 'Unable to open assignment.'); } }
+  async function load() {
+    if (!token) return navigate(`/${user.role}`, { replace: true });
+    try {
+      const r = await api.get(`/work/${assignmentId}/details`, { headers });
+      setData(r.data);
+      const assessmentId = String(r.data.assignment?.assessmentId || r.data.assessment?._id || '');
+      const stored = loadWorkContext(assessmentId);
+      if (stored?.items?.length) {
+        const nextItems = stored.items.map((item) => String(item._id) === String(r.data.assignment._id) ? { ...item, ...r.data.assignment, assessmentId: stored.assessment || r.data.assessment } : item);
+        const nextContext = { ...stored, assessment: stored.assessment || r.data.assessment, items: nextItems };
+        window.sessionStorage.setItem(`evalora_work_context_${assessmentId}`, JSON.stringify(nextContext));
+        setWorkContext(nextContext);
+      } else {
+        setWorkContext({ assessmentId, assessment: r.data.assessment, items: [{ ...r.data.assignment, assessmentId: r.data.assessment }] });
+      }
+    } catch (e) { setError(e.response?.data?.message || 'Unable to open assignment.'); }
+  }
   // The assignment id is the lifecycle boundary; load is intentionally recreated with the current unlock token.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { load(); }, [assignmentId]);
   useEffect(() => { setShowRestartNotice(true); }, [assignmentId]);
   const visibleQuestions = (data?.questions || []).filter((q) => (!filters.type || q.type === filters.type) && (!filters.difficulty || q.difficulty === filters.difficulty));
   const visibleQuestionGroups = useMemo(() => groupQuestionsByTitle(visibleQuestions), [visibleQuestions]);
+  const courseItems = useMemo(() => {
+    const base = workContext?.items?.length ? workContext.items : data?.assignment ? [{ ...data.assignment, assessmentId: data.assessment }] : [];
+    return base
+      .filter((item) => {
+        const haystack = `${item.courseName || ''} ${item.courseId || ''} ${item.facultyId?.name || ''} ${item.moderatorId?.name || ''}`.toLowerCase();
+        const matchesSearch = !courseQuery.trim() || haystack.includes(courseQuery.trim().toLowerCase());
+        const matchesFilter = courseFilter === 'all' || workStatusGroup(item.status) === courseFilter;
+        return matchesSearch && matchesFilter;
+      })
+      .sort((a, b) => {
+        const statusDelta = ['submitted', 'rejected', 'assigned', 'in_progress', 'approved'].indexOf(a.status) - ['submitted', 'rejected', 'assigned', 'in_progress', 'approved'].indexOf(b.status);
+        if (statusDelta) return statusDelta;
+        return String(a.courseName || '').localeCompare(String(b.courseName || ''));
+      });
+  }, [courseFilter, courseQuery, data, workContext]);
+  const courseCounts = useMemo(() => {
+    const base = workContext?.items?.length ? workContext.items : data?.assignment ? [data.assignment] : [];
+    return {
+      total: base.length,
+      pending: base.filter((item) => ['assigned', 'in_progress'].includes(item.status)).length,
+      review: base.filter((item) => item.status === 'submitted').length,
+      rejected: base.filter((item) => item.status === 'rejected').length,
+      approved: base.filter((item) => item.status === 'approved').length,
+    };
+  }, [data, workContext]);
   async function saveQuestion(event) { event.preventDefault(); setBusy(true); try { await api.patch(`/work/${assignmentId}/questions/${editing._id}`, editing, { headers }); setEditing(null); await load(); } catch(e) { setError(e.response?.data?.message || 'Unable to update question.'); } finally { setBusy(false); } }
   async function submit() { setBusy(true); try { await api.post(`/work/${assignmentId}/submit`, { message: submitMessage }, { headers }); setConfirmSubmit(false); setSubmitMessage(''); await load(); } catch(e) { setError(e.response?.data?.message || 'Unable to submit.'); } finally { setBusy(false); } }
   async function decide(decision) { setBusy(true); try { await api.post(`/work/${assignmentId}/decision`, { decision, reason }, { headers }); setRejecting(false); await load(); } catch(e) { setError(e.response?.data?.message || 'Unable to save decision.'); } finally { setBusy(false); } }
@@ -414,53 +604,77 @@ export function WorkWorkspacePage() {
   const { assignment, assessment, canEdit } = data; const moderator = user.role === 'moderator';
   const totalMarks = data.questions.reduce((n,q) => n + Number(q.positiveMarks || 0),0);
   const restartNotice = (assignment.history || []).slice().reverse().find((entry) => entry.action === 'restart_requested');
+  function openCourse(item) {
+    if (String(item._id) === String(assignment._id)) return;
+    const courseToken = window.sessionStorage.getItem(`evalora_work_${item._id}`);
+    if (!courseToken) {
+      setError('Unlock this assessment again to open that course.');
+      return;
+    }
+    navigate(`/${user.role}/work/${item._id}`);
+  }
   return <section className="space-y-3">
-    <PageHeader eyebrow={moderator ? 'Moderator review' : 'Question authoring'} title={assessment.title} description={`${assignment.courseName}${assignment.courseId ? ` (${assignment.courseId})` : ''} · ${assessment.assessmentCode}`} actions={<button className="secondary-button h-9 px-3 text-xs" onClick={() => navigate(`/${user.role}`)}>Back</button>}/>
+    <PageHeader eyebrow={moderator ? 'Moderator review' : 'Question authoring'} title={assessment.title} description={`${assessment.assessmentCode} · ${courseCounts.total} assigned course${courseCounts.total === 1 ? '' : 's'}`} actions={<button className="secondary-button h-9 px-3 text-xs" onClick={() => navigate(`/${user.role}`)}>Back</button>}/>
     {error ? <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm font-semibold text-red-700">{error}</div> : null}
     {restartNotice && showRestartNotice ? <RestartNoticeModal assignment={assignment} notice={restartNotice} onClose={() => setShowRestartNotice(false)} /> : null}
-    <WorkReviewSummary assignment={assignment} assessment={assessment} questionCount={data.questions.length} totalMarks={totalMarks} moderator={moderator} />
-    <SectionPanel title={moderator ? 'Assessment questions' : 'Question set'} icon={FileQuestion} actions={<div className="flex flex-wrap gap-1.5">{!moderator && user.permissions.includes('library.create') ? <button className="secondary-button h-8 px-2.5 text-xs" onClick={() => navigate(`/faculty/library/add?workId=${assignmentId}`)}><Plus size={14}/> Create</button> : null}{!moderator && data.canAdd && user.permissions.includes('library.view') ? <button className="primary-button h-8 px-2.5 text-xs" onClick={() => navigate(`/faculty/library?workId=${assignmentId}`)}><BookOpen size={14}/> Import</button> : null}<select className="field-input h-8 w-32 text-xs" value={filters.type} onChange={(e) => setFilters({...filters,type:e.target.value})}><option value="">All types</option><option value="mcq">MCQ</option><option value="one_word">One word</option></select><select className="field-input h-8 w-36 text-xs" value={filters.difficulty} onChange={(e) => setFilters({...filters,difficulty:e.target.value})}><option value="">All difficulty</option><option value="easy">Easy</option><option value="medium">Medium</option><option value="hard">Hard</option></select></div>}>
-      <div className="space-y-2 p-2.5">
-        <p className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-600">
-          {visibleQuestionGroups.length} title{visibleQuestionGroups.length === 1 ? '' : 's'} · {visibleQuestions.length} question{visibleQuestions.length === 1 ? '' : 's'} · {visibleQuestions.filter((q) => q.type === 'mcq').length} MCQ · {visibleQuestions.reduce((total, question) => total + Number(question.positiveMarks || 0), 0)} marks
-        </p>
-        <div className="max-h-[64vh] space-y-1.5 overflow-y-auto pr-1">
-          {visibleQuestionGroups.map((group) => {
-            const isOpen = expandedFolder === group.heading;
-            return <div key={group.heading} className={`overflow-hidden rounded-lg border bg-white transition ${isOpen ? 'border-brand-200 shadow-sm' : 'border-slate-200'}`}>
-              <button className="grid w-full gap-2 px-3 py-2.5 text-left hover:bg-slate-50 md:grid-cols-[minmax(0,1fr)_auto] md:items-center" type="button" onClick={() => { setExpandedFolder(isOpen ? '' : group.heading); setExpanded(''); }}>
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-semibold text-slate-950">{group.heading}</p>
-                  <p className="mt-0.5 text-xs text-slate-500">{group.questions.length} questions · {group.mcq} MCQ · {group.oneWord} one-word · {group.marks} marks</p>
-                </div>
-                <div className="flex items-center gap-2">
-                  <ChevronDown className={`text-brand-600 transition ${isOpen ? 'rotate-180' : ''}`} size={16}/>
-                </div>
-              </button>
-              {isOpen ? <div className="border-t border-slate-100 bg-slate-50/50 p-1.5">
-                <div className="space-y-1.5">
-                  {group.questions.map((q, index) => <div key={q._id} className="rounded-lg border border-slate-200 bg-white">
-                    <div className="grid gap-2 px-2.5 py-2 md:grid-cols-[2rem_minmax(0,1fr)_auto] md:items-center">
-                      <span className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-slate-200 bg-slate-50 text-[11px] font-bold text-slate-500">{index + 1}</span>
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-semibold text-slate-900">{q.questionText}</p>
-                        <p className="mt-0.5 text-xs text-slate-500">{q.type.replace('_',' ')} · {q.difficulty} · {q.positiveMarks || 0} marks</p>
-                      </div>
-                      <div className="flex items-center gap-1">
-                        {canEdit && assignment.status !== 'approved' ? <button className="secondary-button h-8 px-2 text-xs" type="button" onClick={() => setEditing({ ...q, alternateAnswers: (q.alternateAnswers || []).join(', '), saveToLibrary: false })}>Edit</button> : null}
-                        <button className="secondary-button h-8 w-8 p-0" type="button" onClick={() => setExpanded(expanded === q._id ? '' : q._id)}><ChevronDown className={`transition ${expanded === q._id ? 'rotate-180' : ''}`} size={15}/></button>
-                      </div>
-                    </div>
-                    {expanded === q._id ? <div className="border-t border-slate-100 p-3"><QuestionAnswerDetail question={q}/></div> : null}
-                  </div>)}
-                </div>
-              </div> : null}
-            </div>;
-          })}
-          {!visibleQuestions.length ? <EmptyState title="No questions found" description="Import questions or change the filters."/> : null}
+    <div className="grid gap-3 xl:grid-cols-[20rem_minmax(0,1fr)]">
+      <aside className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+        <div className="border-b border-slate-200 bg-slate-50 p-3">
+          <div className="flex items-center justify-between gap-2">
+            <div><p className="text-[11px] font-bold uppercase text-brand-600">Courses</p><p className="text-sm font-bold text-slate-950">{courseCounts.total} assigned</p></div>
+            <span className="rounded-full border border-brand-200 bg-brand-50 px-2 py-1 text-xs font-bold text-brand-700">{groupProgress({ total: courseCounts.total, approved: courseCounts.approved })}%</span>
+          </div>
+          <div className="relative mt-3"><Search className="absolute left-3 top-2.5 text-slate-400" size={15}/><input className="field-input h-9 pl-9 text-sm" value={courseQuery} onChange={(event) => setCourseQuery(event.target.value)} placeholder="Search course or faculty" /></div>
+          <div className="mt-2 grid grid-cols-2 gap-1.5">
+            {[['all', 'All', courseCounts.total], ['pending', 'To do', courseCounts.pending], ['submitted', 'Review', courseCounts.review], ['approved', 'Done', courseCounts.approved]].map(([key, label, value]) => <button key={key} className={`rounded-md border px-2 py-1.5 text-xs font-bold transition ${courseFilter === key ? 'border-brand-200 bg-brand-50 text-brand-700' : 'border-slate-200 bg-white text-slate-600 hover:border-brand-200'}`} type="button" onClick={() => setCourseFilter(key)}>{label} {value}</button>)}
+          </div>
         </div>
+        <div className="max-h-[calc(100vh-21rem)] min-h-[20rem] overflow-y-auto p-2">
+          {courseItems.map((item) => {
+            const active = String(item._id) === String(assignment._id);
+            return <button key={item._id} className={`mb-1.5 block w-full rounded-lg border px-3 py-2 text-left transition ${active ? 'border-brand-200 bg-brand-50 shadow-sm' : 'border-slate-200 bg-white hover:border-brand-200 hover:bg-slate-50'}`} type="button" onClick={() => openCourse(item)}>
+              <div className="flex items-center justify-between gap-2"><p className="truncate text-sm font-bold text-slate-950">{item.courseName}</p><span className={statusClass(item.status)}>{item.status.replace('_',' ')}</span></div>
+              <p className="mt-0.5 truncate text-xs font-semibold text-slate-500">{item.courseId || 'No course ID'}</p>
+              <p className="mt-1 truncate text-[11px] font-semibold text-slate-400">{moderator ? `Faculty: ${item.facultyId?.name || '-'}` : `Moderator: ${item.moderatorId?.name || '-'}`}</p>
+            </button>;
+          })}
+          {!courseItems.length ? <EmptyState title="No courses found" description="Adjust course search or status." /> : null}
+        </div>
+      </aside>
+
+      <div className="min-w-0 space-y-3">
+        <WorkReviewSummary assignment={assignment} assessment={assessment} questionCount={data.questions.length} totalMarks={totalMarks} moderator={moderator} />
+        <SectionPanel title={moderator ? 'Assessment questions' : 'Question set'} icon={FileQuestion} actions={<div className="flex flex-wrap gap-1.5">{!moderator && user.permissions.includes('library.create') ? <button className="secondary-button h-8 px-2.5 text-xs" onClick={() => navigate(`/faculty/library/add?workId=${assignmentId}`)}><Plus size={14}/> Create</button> : null}{!moderator && data.canAdd && user.permissions.includes('library.view') ? <button className="primary-button h-8 px-2.5 text-xs" onClick={() => navigate(`/faculty/library?workId=${assignmentId}`)}><BookOpen size={14}/> Import</button> : null}<select className="field-input h-8 w-32 text-xs" value={filters.type} onChange={(e) => setFilters({...filters,type:e.target.value})}><option value="">All types</option><option value="mcq">MCQ</option><option value="one_word">One word</option></select><select className="field-input h-8 w-36 text-xs" value={filters.difficulty} onChange={(e) => setFilters({...filters,difficulty:e.target.value})}><option value="">All difficulty</option><option value="easy">Easy</option><option value="medium">Medium</option><option value="hard">Hard</option></select></div>}>
+          <div className="space-y-2 p-2.5">
+            <p className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-600">
+              {visibleQuestionGroups.length} title{visibleQuestionGroups.length === 1 ? '' : 's'} · {visibleQuestions.length} question{visibleQuestions.length === 1 ? '' : 's'} · {visibleQuestions.filter((q) => q.type === 'mcq').length} MCQ · {visibleQuestions.reduce((total, question) => total + Number(question.positiveMarks || 0), 0)} marks
+            </p>
+            <div className="max-h-[64vh] space-y-1.5 overflow-y-auto pr-1">
+              {visibleQuestionGroups.map((group) => {
+                const isOpen = expandedFolder === group.heading;
+                return <div key={group.heading} className={`overflow-hidden rounded-lg border bg-white transition ${isOpen ? 'border-brand-200 shadow-sm' : 'border-slate-200'}`}>
+                  <button className="grid w-full gap-2 px-3 py-2.5 text-left hover:bg-slate-50 md:grid-cols-[minmax(0,1fr)_auto] md:items-center" type="button" onClick={() => { setExpandedFolder(isOpen ? '' : group.heading); setExpanded(''); }}>
+                    <div className="min-w-0"><p className="truncate text-sm font-semibold text-slate-950">{group.heading}</p><p className="mt-0.5 text-xs text-slate-500">{group.questions.length} questions · {group.mcq} MCQ · {group.oneWord} one-word · {group.marks} marks</p></div>
+                    <ChevronDown className={`text-brand-600 transition ${isOpen ? 'rotate-180' : ''}`} size={16}/>
+                  </button>
+                  {isOpen ? <div className="border-t border-slate-100 bg-slate-50/50 p-1.5"><div className="space-y-1.5">
+                    {group.questions.map((q, index) => <div key={q._id} className="rounded-lg border border-slate-200 bg-white">
+                      <div className="grid gap-2 px-2.5 py-2 md:grid-cols-[2rem_minmax(0,1fr)_auto] md:items-center">
+                        <span className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-slate-200 bg-slate-50 text-[11px] font-bold text-slate-500">{index + 1}</span>
+                        <div className="min-w-0"><p className="truncate text-sm font-semibold text-slate-900">{q.questionText}</p><p className="mt-0.5 text-xs text-slate-500">{q.type.replace('_',' ')} · {q.difficulty} · {q.positiveMarks || 0} marks</p></div>
+                        <div className="flex items-center gap-1">{canEdit && assignment.status !== 'approved' ? <button className="secondary-button h-8 px-2 text-xs" type="button" onClick={() => setEditing({ ...q, alternateAnswers: (q.alternateAnswers || []).join(', '), saveToLibrary: false })}>Edit</button> : null}<button className="secondary-button h-8 w-8 p-0" type="button" onClick={() => setExpanded(expanded === q._id ? '' : q._id)}><ChevronDown className={`transition ${expanded === q._id ? 'rotate-180' : ''}`} size={15}/></button></div>
+                      </div>
+                      {expanded === q._id ? <div className="border-t border-slate-100 p-3"><QuestionAnswerDetail question={q}/></div> : null}
+                    </div>)}
+                  </div></div> : null}
+                </div>;
+              })}
+              {!visibleQuestions.length ? <EmptyState title="No questions found" description="Import questions or change the filters."/> : null}
+            </div>
+          </div>
+        </SectionPanel>
       </div>
-    </SectionPanel>
+    </div>
     <div className="flex justify-end gap-3">{moderator && assignment.status === 'submitted' ? <><button className="secondary-button border-red-200 text-red-700" onClick={() => setRejecting(true)}><XCircle size={17}/> Reject with reason</button><button className="primary-button bg-green-600 hover:bg-green-700" disabled={busy} onClick={() => decide('approve')}><ShieldCheck size={17}/> Approve assessment</button></> : !moderator && ['assigned','in_progress','rejected'].includes(assignment.status) ? <button className="primary-button" disabled={busy || !data.questions.length} onClick={() => setConfirmSubmit(true)}><Send size={17}/> Submit to moderator</button> : null}</div>
     {editing ? <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-950/45 p-4"><div className="mx-auto my-6 max-w-4xl rounded-xl bg-white p-5 shadow-2xl"><div className="mb-4 flex justify-between"><h2 className="text-lg font-bold">Edit assessment question</h2><button onClick={() => setEditing(null)}>×</button></div><QuestionForm courses={[{courseName:assignment.courseName,courseId:assignment.courseId}]} value={editing} onChange={setEditing} onSubmit={saveQuestion} isSaving={busy} submitLabel="Update Question"/></div></div> : null}
     {confirmSubmit ? <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/45 p-4"><div className="w-full max-w-xl overflow-hidden rounded-xl bg-white shadow-2xl"><div className="flex items-start justify-between gap-3 border-b border-slate-200 bg-slate-50 p-4"><div><p className="text-xs font-bold uppercase text-brand-600">Send for moderator review</p><h2 className="mt-1 text-base font-semibold text-slate-950">{assignment.courseName}</h2><p className="mt-1 text-xs text-slate-500">{data.questions.length} questions will move to {assignment.moderatorId?.name || 'the assigned moderator'}.</p></div><button className="secondary-button h-8 w-8 p-0" type="button" onClick={() => setConfirmSubmit(false)}><X size={15}/></button></div><div className="space-y-3 p-4"><div className="grid gap-2 rounded-lg border border-slate-200 bg-white p-3 text-xs sm:grid-cols-2"><p><span className="text-slate-500">Assessment</span><b className="mt-0.5 block text-slate-900">{assessment.title}</b></p><p><span className="text-slate-500">Moderator</span><b className="mt-0.5 block text-slate-900">{assignment.moderatorId?.name || 'Assigned moderator'}</b></p></div><label className="block"><span className="field-label">Optional note</span><textarea className="field-input mt-1 min-h-24 text-sm" value={submitMessage} onChange={(event) => setSubmitMessage(event.target.value)} placeholder="Short note for moderator, if needed." /></label></div><div className="flex justify-end gap-2 border-t border-slate-200 bg-slate-50 p-4"><button className="secondary-button" type="button" onClick={() => setConfirmSubmit(false)}>Cancel</button><button className="primary-button" type="button" disabled={busy} onClick={submit}><Send size={16}/>{busy ? 'Sending...' : 'Send to moderator'}</button></div></div></div> : null}

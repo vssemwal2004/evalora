@@ -66,9 +66,13 @@ async function removeDuplicateAssignments(assessmentId, assignments) {
 async function syncAssessmentAssignments(assessment, actor, options = {}) {
   const activeCourseKeys = new Set();
   const mailQueue = [];
+  const moderatorMailQueue = [];
   const restartCourseKeys = new Set((options.restartCourseKeys || []).filter(Boolean));
   const restartMessage = String(options.restartMessage || '').trim();
-  const assignments = await AssessmentAssignment.find({ assessmentId: assessment._id }).select('+passwordPreview');
+  const assignments = await AssessmentAssignment.find({ assessmentId: assessment._id }).select('+passwordHash +passwordPreview');
+  const existingPasswordAssignment = assignments.find((assignment) => assignment.passwordPreview && assignment.passwordHash);
+  const commonPassword = existingPasswordAssignment?.passwordPreview || generatePassword(8);
+  const commonPasswordHash = existingPasswordAssignment?.passwordHash || await AssessmentAssignment.hashPassword(commonPassword);
 
   for (const course of assessment.courses || []) {
     if (!course.facultyId || !course.moderatorId) continue;
@@ -78,7 +82,6 @@ async function syncAssessmentAssignments(assessment, actor, options = {}) {
     let assignment = pickPrimaryAssignment(assignments.filter((item) => assignmentMatchesCourse(item, course)));
 
     if (!assignment) {
-      const password = generatePassword(8);
       assignment = await AssessmentAssignment.create({
         assessmentId: assessment._id,
         ownerAdminId: assessment.ownerAdminId,
@@ -88,8 +91,8 @@ async function syncAssessmentAssignments(assessment, actor, options = {}) {
         courseSubdocumentId: course._id,
         facultyId: course.facultyId,
         moderatorId: course.moderatorId,
-        passwordHash: await AssessmentAssignment.hashPassword(password),
-        passwordPreview: password,
+        passwordHash: commonPasswordHash,
+        passwordPreview: commonPassword,
         history: [{
           action: 'assigned',
           message: `Assigned by ${actor?.name || 'administrator'}`,
@@ -110,21 +113,32 @@ async function syncAssessmentAssignments(assessment, actor, options = {}) {
     assignment.courseSubdocumentId = course._id;
     assignment.ownerAdminId = assessment.ownerAdminId;
 
+    if (assignment.passwordPreview !== commonPassword && assignment.status !== 'approved') {
+      assignment.passwordHash = commonPasswordHash;
+      assignment.passwordPreview = commonPassword;
+      if (['assigned', 'in_progress', 'rejected'].includes(assignment.status)) {
+        assignment.facultyMail = { status: 'pending' };
+        mailQueue.push(assignment._id);
+      } else if (assignment.status === 'submitted') {
+        assignment.moderatorMail = { status: 'not_sent' };
+        moderatorMailQueue.push(assignment._id);
+      }
+    }
+
     if (!wasApproved || isRestart) {
       assignment.facultyId = course.facultyId;
       assignment.moderatorId = course.moderatorId;
     }
 
     if (isRestart) {
-      const password = generatePassword(8);
       assignment.status = 'assigned';
       assignment.rejectionReason = '';
       assignment.submittedAt = undefined;
       assignment.reviewedAt = undefined;
       assignment.facultyMail = { status: 'pending' };
       assignment.moderatorMail = { status: 'not_sent' };
-      assignment.passwordHash = await AssessmentAssignment.hashPassword(password);
-      assignment.passwordPreview = password;
+      assignment.passwordHash = commonPasswordHash;
+      assignment.passwordPreview = commonPassword;
       assignment.history.push({
         action: 'restart_requested',
         message: restartMessage || `Review again requested by ${actor?.name || 'administrator'}`,
@@ -155,7 +169,7 @@ async function syncAssessmentAssignments(assessment, actor, options = {}) {
 
   await removeDuplicateAssignments(assessment._id, await AssessmentAssignment.find({ assessmentId: assessment._id }));
 
-  for (const id of mailQueue) {
+  for (const id of Array.from(new Set(mailQueue.map((value) => String(value))))) {
     const assignment = await AssessmentAssignment.findById(id).select('+passwordPreview');
     if (!assignment) continue;
 
@@ -167,6 +181,22 @@ async function syncAssessmentAssignments(assessment, actor, options = {}) {
       assignment.facultyMail = { status: 'sent', sentAt: new Date() };
     } catch (error) {
       assignment.facultyMail = { status: 'failed', error: error.message };
+    }
+    await assignment.save();
+  }
+
+  for (const id of Array.from(new Set(moderatorMailQueue.map((value) => String(value))))) {
+    const assignment = await AssessmentAssignment.findById(id).select('+passwordPreview');
+    if (!assignment) continue;
+
+    const moderator = await User.findById(assignment.moderatorId);
+    if (!moderator?.email) continue;
+
+    try {
+      await sendAssignmentMail({ assignment, assessment, recipient: moderator, assignedBy: actor, kind: 'submitted' });
+      assignment.moderatorMail = { status: 'sent', sentAt: new Date() };
+    } catch (error) {
+      assignment.moderatorMail = { status: 'failed', error: error.message };
     }
     await assignment.save();
   }

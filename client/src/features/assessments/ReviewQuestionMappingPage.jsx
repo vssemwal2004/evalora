@@ -181,7 +181,7 @@ function RestartReviewModal({ course, isBusy, message, onMessageChange, onCancel
               <p className="text-xs font-bold uppercase tracking-wider text-amber-700">Review again</p>
               <h2 className="mt-1 text-lg font-bold text-slate-950">{course?.courseName}</h2>
               <p className="mt-1 text-sm leading-5 text-amber-800">
-                This will reopen the approved course, generate a new assignment password, and send it back through faculty and moderator review.
+                This will reopen the approved course with the shared assessment work password and send it back through faculty and moderator review.
               </p>
             </div>
           </div>

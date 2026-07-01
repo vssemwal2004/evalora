@@ -20,7 +20,8 @@ function hasPermission(req, permission) {
     [ROLES.FACULTY]: ['work.view', 'assessment.questions.add', 'assessment.questions.edit', 'assessment.submit', 'library.view', 'library.create', 'library.edit', 'library.archive'],
     [ROLES.MODERATOR]: ['work.view', 'assessment.review', 'assessment.questions.edit'],
   };
-  return req.user.permissions.includes(permission) || (roleDefaults[req.user.role] || []).includes(permission);
+  const permissions = Array.isArray(req.user?.permissions) ? req.user.permissions : [];
+  return permissions.includes(permission) || (roleDefaults[req.user?.role] || []).includes(permission);
 }
 
 function assignmentScope(req) {
@@ -56,7 +57,14 @@ async function findAssignment(req, { tokenRequired = false } = {}) {
   if (!assignment) return null;
   if (tokenRequired) {
     const raw = req.headers['x-assignment-token'];
-    const payload = verifyAssignmentToken(raw || '');
+    let payload;
+    try {
+      payload = verifyAssignmentToken(raw || '');
+    } catch (error) {
+      error.statusCode = 401;
+      error.publicMessage = 'Unlock this assignment again.';
+      throw error;
+    }
     if (payload.assignmentId !== String(assignment._id) || payload.sub !== String(req.user._id)) return null;
   }
   return assignment;
@@ -78,7 +86,24 @@ router.post('/:id/unlock', async (req, res, next) => {
   try {
     const assignment = await AssessmentAssignment.findOne({ _id: req.params.id, ...assignmentScope(req) }).select('+passwordHash');
     if (!assignment) return res.status(404).json({ message: 'Assigned work was not found.' });
-    if (!(await assignment.comparePassword(String(req.body.password || '')))) return res.status(401).json({ message: 'Incorrect assignment password.' });
+    const rawPassword = String(req.body.password || '');
+    let passwordMatches = await assignment.comparePassword(rawPassword);
+
+    if (!passwordMatches) {
+      const siblingAssignments = await AssessmentAssignment.find({
+        assessmentId: assignment.assessmentId,
+        ...assignmentScope(req),
+        _id: { $ne: assignment._id },
+      }).select('+passwordHash');
+      for (const siblingAssignment of siblingAssignments) {
+        if (await siblingAssignment.comparePassword(rawPassword)) {
+          passwordMatches = true;
+          break;
+        }
+      }
+    }
+
+    if (!passwordMatches) return res.status(401).json({ message: 'Incorrect assignment password.' });
     if (req.user.role === ROLES.FACULTY && assignment.status === 'assigned') {
       assignment.status = 'in_progress';
       assignment.history.push({ action: 'opened', actorId: req.user._id, actorName: req.user.name });
@@ -108,7 +133,11 @@ router.get('/:id/details', async (req, res, next) => {
       AssessmentQuestion.find({ assessmentId: assignment.assessmentId, courseName: assignment.courseName, ...(assignment.courseId ? { courseId: assignment.courseId } : {}) }).sort({ order: 1, createdAt: 1 }),
     ]);
     return res.json({ assignment: serialize(assignment), assessment, questions, canEdit: hasPermission(req, 'assessment.questions.edit'), canAdd: hasPermission(req, 'assessment.questions.add') });
-  } catch (error) { return error.name === 'JsonWebTokenError' ? res.status(401).json({ message: 'Unlock this assignment again.' }) : next(error); }
+  } catch (error) {
+    return error.statusCode === 401 || error.name === 'JsonWebTokenError'
+      ? res.status(401).json({ message: error.publicMessage || 'Unlock this assignment again.' })
+      : next(error);
+  }
 });
 
 router.post('/:id/questions', async (req, res, next) => {
