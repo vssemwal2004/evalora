@@ -9,12 +9,75 @@ const AssessmentAnswer = require('../models/AssessmentAnswer');
 const AssessmentSecurityEvent = require('../models/AssessmentSecurityEvent');
 const { ROLES } = require('../constants/roles');
 const { authenticate, requirePermission, requireRole } = require('../middleware/auth');
+const { adminWriteLimiter } = require('../middleware/rateLimit');
+const { objectIdString, validateBody, validateObjectIdParams, z } = require('../middleware/validate');
 const { writeAuditLog } = require('../services/audit.service');
 const { getCourseKey, pickPrimaryAssignment, syncAssessmentAssignments } = require('../services/assignment.service');
 
 const router = express.Router();
+const optionalObjectIdString = z.preprocess(
+  (value) => (value === '' || value === null ? undefined : value),
+  objectIdString.optional()
+);
+const optionalDateString = z.preprocess(
+  (value) => (value === '' || value === null ? undefined : value),
+  z.union([
+    z.date(),
+    z.string().refine((value) => !Number.isNaN(new Date(value).getTime()), 'Invalid date.'),
+  ]).optional()
+);
+const optionalPositiveInteger = z.preprocess(
+  (value) => (value === '' || value === null ? undefined : value),
+  z.coerce.number().int().min(1).max(1440).optional()
+);
+const assessmentCourseBodySchema = z.object({
+  courseName: z.string().trim().max(200).optional(),
+  courseId: z.string().trim().max(80).optional(),
+  courseCode: z.string().trim().max(80).optional(),
+  questionCount: z.coerce.number().int().min(0).max(100000).optional(),
+  studentCount: z.coerce.number().int().min(0).max(100000).optional(),
+  eligibleStudentCount: z.coerce.number().int().min(0).max(100000).optional(),
+  facultyId: optionalObjectIdString,
+  facultyName: z.string().trim().max(160).optional(),
+  facultyEmail: z.string().trim().toLowerCase().max(320).optional(),
+  moderatorId: optionalObjectIdString,
+  moderatorName: z.string().trim().max(160).optional(),
+  moderatorEmail: z.string().trim().toLowerCase().max(320).optional(),
+}).passthrough();
+const assessmentCreateBodySchema = z.object({
+  title: z.string().trim().min(1, 'Assessment title is required.').max(200),
+  assessmentCode: z.string().trim().min(1, 'Assessment code is required.').max(80),
+  type: z.string().trim().max(80).optional(),
+  description: z.string().trim().max(5000).optional(),
+  instructions: z.string().trim().max(10000).optional(),
+  internalNote: z.string().trim().max(5000).optional(),
+  visibility: z.enum(['visible', 'hidden']).optional().default('hidden'),
+  questionSource: z.enum(['faculty', 'both', 'admin']).optional().default('both'),
+  startAt: optionalDateString,
+  endAt: optionalDateString,
+  globalDurationMinutes: optionalPositiveInteger,
+  courses: z.array(assessmentCourseBodySchema).max(500).optional().default([]),
+  settings: z.record(z.unknown()).optional().default({}),
+  status: z.enum(['draft', 'review', 'upcoming', 'active', 'pending', 'completed']).optional().default('draft'),
+}).passthrough();
+const assessmentPatchBodySchema = assessmentCreateBodySchema.partial().refine(
+  (value) => Object.keys(value).length > 0,
+  'At least one field is required.'
+);
+const visibilityBodySchema = z.object({
+  visibility: z.enum(['visible', 'hidden']),
+});
+const assessmentStatusBodySchema = z.object({
+  status: z.enum(['draft', 'review', 'upcoming', 'active', 'pending', 'completed']),
+});
+const restartCourseBodySchema = z.object({
+  courseSubdocumentId: optionalObjectIdString,
+  course: assessmentCourseBodySchema.optional(),
+  message: z.string().trim().max(2000).optional().default(''),
+}).passthrough();
 
 router.use(authenticate, requireRole(ROLES.SUPER_ADMIN, ROLES.ADMIN));
+router.use('/:id', validateObjectIdParams('id'));
 
 function getScopedQuery(req) {
   if (req.user.role === ROLES.SUPER_ADMIN) {
@@ -331,7 +394,7 @@ router.get('/', requirePermission('assessment.view'), async (req, res, next) => 
   }
 });
 
-router.post('/', requirePermission('assessment.create'), async (req, res, next) => {
+router.post('/', adminWriteLimiter, validateBody(assessmentCreateBodySchema), requirePermission('assessment.create'), async (req, res, next) => {
   try {
     const {
       title,
@@ -414,7 +477,7 @@ router.post('/', requirePermission('assessment.create'), async (req, res, next) 
   }
 });
 
-router.patch('/:id', requirePermission('assessment.edit'), async (req, res, next) => {
+router.patch('/:id', adminWriteLimiter, validateBody(assessmentPatchBodySchema), requirePermission('assessment.edit'), async (req, res, next) => {
   try {
     const assessment = await findScopedAssessment(req);
 
@@ -557,7 +620,7 @@ router.patch('/:id', requirePermission('assessment.edit'), async (req, res, next
   }
 });
 
-router.patch('/:id/visibility', requirePermission('assessment.hide'), async (req, res, next) => {
+router.patch('/:id/visibility', adminWriteLimiter, validateBody(visibilityBodySchema), requirePermission('assessment.hide'), async (req, res, next) => {
   try {
     const visibility = String(req.body.visibility || '').trim();
 
@@ -596,7 +659,7 @@ router.patch('/:id/visibility', requirePermission('assessment.hide'), async (req
   }
 });
 
-router.patch('/:id/status', requirePermission('assessment.complete'), async (req, res, next) => {
+router.patch('/:id/status', adminWriteLimiter, validateBody(assessmentStatusBodySchema), requirePermission('assessment.complete'), async (req, res, next) => {
   try {
     const status = String(req.body.status || '').trim();
 
@@ -658,7 +721,7 @@ router.patch('/:id/status', requirePermission('assessment.complete'), async (req
   }
 });
 
-router.post('/:id/assignments/restart-course', requirePermission('assessment.review.send'), async (req, res, next) => {
+router.post('/:id/assignments/restart-course', adminWriteLimiter, validateBody(restartCourseBodySchema), requirePermission('assessment.review.send'), async (req, res, next) => {
   try {
     const assessment = await findScopedAssessment(req);
 
@@ -784,11 +847,11 @@ router.get('/:id/assignments/passwords', requirePermission('assessment.view'), a
   }
 });
 
-router.patch('/:id/password', requirePermission('assessment.edit'), (_req, res) => {
+router.patch('/:id/password', adminWriteLimiter, requirePermission('assessment.edit'), (_req, res) => {
   return res.status(410).json({ message: 'Common assessment passwords are no longer used. Each user receives a unique password.' });
 });
 
-router.post('/:id/duplicate', requirePermission('assessment.duplicate'), async (req, res, next) => {
+router.post('/:id/duplicate', adminWriteLimiter, requirePermission('assessment.duplicate'), async (req, res, next) => {
   try {
     const assessment = await findScopedAssessment(req);
 
@@ -885,7 +948,7 @@ router.post('/:id/duplicate', requirePermission('assessment.duplicate'), async (
   }
 });
 
-router.post('/:id/copy-as-mock', requirePermission('assessment.duplicate'), async (req, res, next) => {
+router.post('/:id/copy-as-mock', adminWriteLimiter, requirePermission('assessment.duplicate'), async (req, res, next) => {
   try {
     const assessment = await findScopedAssessment(req);
 
@@ -1052,7 +1115,7 @@ router.post('/:id/copy-as-mock', requirePermission('assessment.duplicate'), asyn
   }
 });
 
-router.post('/:id/reset-attempts', requirePermission('assessment.edit'), async (req, res, next) => {
+router.post('/:id/reset-attempts', adminWriteLimiter, requirePermission('assessment.edit'), async (req, res, next) => {
   try {
     const assessment = await findScopedAssessment(req);
 
@@ -1099,7 +1162,7 @@ router.post('/:id/reset-attempts', requirePermission('assessment.edit'), async (
   }
 });
 
-router.delete('/:id', requirePermission('assessment.delete'), async (req, res, next) => {
+router.delete('/:id', adminWriteLimiter, requirePermission('assessment.delete'), async (req, res, next) => {
   try {
     const assessment = await findScopedAssessment(req);
 

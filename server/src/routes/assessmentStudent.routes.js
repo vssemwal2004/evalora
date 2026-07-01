@@ -6,13 +6,36 @@ const AssessmentProctor = require('../models/AssessmentProctor');
 const StudentProfile = require('../models/StudentProfile');
 const { ROLES } = require('../constants/roles');
 const { authenticate, requirePermission, requireRole } = require('../middleware/auth');
+const { adminWriteLimiter, bulkImportLimiter, mailSendLimiter } = require('../middleware/rateLimit');
+const { objectIdString, validateBody, validateObjectIdParams, validateQuery, z } = require('../middleware/validate');
 const { writeAuditLog } = require('../services/audit.service');
 const { sendStudentCredentialMail } = require('../services/credentialMail.service');
 const { generateExamId, generatePassword } = require('../utils/credentials');
 
 const router = express.Router({ mergeParams: true });
+const studentQuerySchema = z.object({
+  search: z.string().trim().max(200).optional(),
+  course: z.string().trim().max(200).optional(),
+  eligibility: z.enum(['eligible', 'not_eligible', 'needs_review']).optional().or(z.literal('')),
+}).passthrough();
+const bulkRowsBodySchema = z.object({
+  rows: z.array(z.record(z.unknown())).min(1, 'At least one row is required.').max(1000),
+});
+const addStudentBodySchema = z.object({
+  name: z.string().trim().min(1, 'Student name is required.').max(160),
+  email: z.string().trim().toLowerCase().email('Valid student email is required.').max(320),
+  applicationNumber: z.string().trim().max(100).optional().default(''),
+  courseName: z.string().trim().min(1, 'Course name is required.').max(200),
+  courseId: z.string().trim().max(80).optional().default(''),
+  eligibilityStatus: z.enum(['eligible', 'not_eligible', 'needs_review']).optional().default('eligible'),
+  eligibilityReason: z.string().trim().max(1000).optional().default(''),
+});
+const bulkDeleteBodySchema = z.object({
+  ids: z.array(objectIdString).min(1, 'Select at least one student.').max(1000),
+});
 
 router.use(authenticate, requireRole(ROLES.SUPER_ADMIN, ROLES.ADMIN));
+router.use(validateObjectIdParams('assessmentId'));
 
 function getAssessmentScope(req) {
   return req.user.role === ROLES.SUPER_ADMIN ? {} : { ownerAdminId: req.user._id };
@@ -263,7 +286,7 @@ async function createOrReplaceStudentAssignment({ assessment, row, decision, act
   };
 }
 
-router.get('/', requirePermission('assessment.view'), async (req, res, next) => {
+router.get('/', validateQuery(studentQuerySchema), requirePermission('assessment.view'), async (req, res, next) => {
   try {
     const assessment = await findScopedAssessment(req);
     if (!assessment) {
@@ -307,7 +330,7 @@ router.get('/', requirePermission('assessment.view'), async (req, res, next) => 
   }
 });
 
-router.post('/bulk-validate', requirePermission('student.add'), async (req, res, next) => {
+router.post('/bulk-validate', bulkImportLimiter, validateBody(bulkRowsBodySchema), requirePermission('student.add'), async (req, res, next) => {
   try {
     const assessment = await findScopedAssessment(req);
     if (!assessment) {
@@ -342,7 +365,7 @@ router.post('/bulk-validate', requirePermission('student.add'), async (req, res,
   }
 });
 
-router.post('/bulk-save', requirePermission('student.add'), async (req, res, next) => {
+router.post('/bulk-save', bulkImportLimiter, validateBody(bulkRowsBodySchema), requirePermission('student.add'), async (req, res, next) => {
   try {
     const assessment = await findScopedAssessment(req);
     if (!assessment) {
@@ -426,7 +449,7 @@ router.post('/bulk-save', requirePermission('student.add'), async (req, res, nex
   }
 });
 
-router.post('/', requirePermission('student.add'), async (req, res, next) => {
+router.post('/', adminWriteLimiter, validateBody(addStudentBodySchema), requirePermission('student.add'), async (req, res, next) => {
   try {
     const assessment = await findScopedAssessment(req);
     if (!assessment) {
@@ -528,7 +551,7 @@ router.post('/', requirePermission('student.add'), async (req, res, next) => {
   }
 });
 
-router.delete('/bulk', requirePermission('student.remove'), async (req, res, next) => {
+router.delete('/bulk', adminWriteLimiter, validateBody(bulkDeleteBodySchema), requirePermission('student.remove'), async (req, res, next) => {
   try {
     const assessment = await findScopedAssessment(req);
     if (!assessment) {
@@ -572,7 +595,7 @@ router.delete('/bulk', requirePermission('student.remove'), async (req, res, nex
   }
 });
 
-router.delete('/:studentId', requirePermission('student.remove'), async (req, res, next) => {
+router.delete('/:studentId', adminWriteLimiter, validateObjectIdParams('studentId'), requirePermission('student.remove'), async (req, res, next) => {
   try {
     const assessment = await findScopedAssessment(req);
     if (!assessment) {
@@ -612,7 +635,7 @@ router.delete('/:studentId', requirePermission('student.remove'), async (req, re
   }
 });
 
-router.post('/send-mail', requirePermission('mail.send'), async (req, res, next) => {
+router.post('/send-mail', mailSendLimiter, requirePermission('mail.send'), async (req, res, next) => {
   try {
     const assessment = await findScopedAssessment(req);
     if (!assessment) {
@@ -666,7 +689,7 @@ router.post('/send-mail', requirePermission('mail.send'), async (req, res, next)
   }
 });
 
-router.post('/:studentId/send-mail', requirePermission('mail.send'), async (req, res, next) => {
+router.post('/:studentId/send-mail', mailSendLimiter, validateObjectIdParams('studentId'), requirePermission('mail.send'), async (req, res, next) => {
   try {
     const assessment = await findScopedAssessment(req);
     if (!assessment) {

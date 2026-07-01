@@ -5,11 +5,43 @@ const Course = require('../models/Course');
 const User = require('../models/User');
 const { ROLES } = require('../constants/roles');
 const { authenticate, requirePermission, requireRole } = require('../middleware/auth');
+const { adminWriteLimiter, bulkImportLimiter, mailSendLimiter } = require('../middleware/rateLimit');
+const { validateBody, validateObjectIdParams, z } = require('../middleware/validate');
 const { sendStaffCredentialMail } = require('../services/credentialMail.service');
 const { writeAuditLog } = require('../services/audit.service');
 const { generatePassword } = require('../utils/credentials');
 
 const router = express.Router();
+const assignedCoursesPayloadSchema = z.union([
+  z.string().trim().max(10000),
+  z.array(z.record(z.unknown())).max(500),
+]);
+const staffCreateBodySchema = z.object({
+  name: z.string().trim().min(1, 'Name is required.').max(160),
+  email: z.string().trim().toLowerCase().email('Valid email is required.').max(320),
+  assignedCourses: assignedCoursesPayloadSchema,
+});
+const staffBulkRowsBodySchema = z.object({
+  rows: z.array(z.record(z.unknown())).min(1, 'At least one row is required.').max(1000, 'Upload limit is 1000 rows per import.'),
+  sendMail: z.boolean().optional().default(false),
+});
+const staffUpdateBodySchema = z.object({
+  name: z.string().trim().min(1).max(160).optional(),
+  email: z.string().trim().toLowerCase().email().max(320).optional(),
+  assignedCourses: assignedCoursesPayloadSchema.optional(),
+  status: z.enum(['active', 'inactive', 'blocked']).optional(),
+  permissions: z.array(z.string().trim().min(1).max(120)).max(200).optional(),
+}).refine((value) => Object.keys(value).length > 0, 'At least one field is required.');
+const staffPasswordBodySchema = z.object({
+  generate: z.boolean().optional().default(false),
+  newPassword: z.string().max(200).optional().default(''),
+  confirmPassword: z.string().max(200).optional().default(''),
+  sendMail: z.boolean().optional().default(false),
+});
+const staffStatusBodySchema = z.object({
+  status: z.enum(['active', 'inactive', 'blocked']),
+});
+const peopleKindSchema = z.enum(['faculty', 'moderators']);
 
 function defaultStaffPermissions(role) {
   if (role === ROLES.FACULTY) return ['work.view', 'assessment.questions.add', 'assessment.questions.edit', 'assessment.submit', 'library.view', 'library.create', 'library.edit', 'library.archive'];
@@ -41,6 +73,15 @@ const roleConfig = {
 };
 
 router.use(authenticate, requireRole(ROLES.SUPER_ADMIN, ROLES.ADMIN));
+router.param('kind', (req, res, next, value) => {
+  const result = peopleKindSchema.safeParse(value);
+  if (!result.success) {
+    return res.status(404).json({ message: 'People role not found.' });
+  }
+
+  req.params.kind = result.data;
+  return next();
+});
 
 function getConfig(req, res) {
   const config = roleConfig[req.params.kind];
@@ -244,7 +285,7 @@ router.get('/:kind', async (req, res, next) => {
   }
 });
 
-router.post('/:kind', async (req, res, next) => {
+router.post('/:kind', adminWriteLimiter, validateBody(staffCreateBodySchema), async (req, res, next) => {
   try {
     const config = getConfig(req, res);
     if (!config) return;
@@ -308,7 +349,7 @@ router.post('/:kind', async (req, res, next) => {
   }
 });
 
-router.post('/:kind/bulk-validate', async (req, res, next) => {
+router.post('/:kind/bulk-validate', bulkImportLimiter, validateBody(staffBulkRowsBodySchema), async (req, res, next) => {
   try {
     const config = getConfig(req, res);
     if (!config) return;
@@ -337,7 +378,7 @@ router.post('/:kind/bulk-validate', async (req, res, next) => {
   }
 });
 
-router.post('/:kind/bulk-save', async (req, res, next) => {
+router.post('/:kind/bulk-save', bulkImportLimiter, validateBody(staffBulkRowsBodySchema), async (req, res, next) => {
   try {
     const config = getConfig(req, res);
     if (!config) return;
@@ -438,7 +479,7 @@ function serializeProfileLog(log) {
   };
 }
 
-router.get('/:kind/:id/profile', async (req, res, next) => {
+router.get('/:kind/:id/profile', validateObjectIdParams('id'), async (req, res, next) => {
   try {
     const config = getConfig(req, res);
     if (!config) return;
@@ -502,7 +543,7 @@ router.get('/:kind/:id/profile', async (req, res, next) => {
   }
 });
 
-router.patch('/:kind/:id', async (req, res, next) => {
+router.patch('/:kind/:id', adminWriteLimiter, validateObjectIdParams('id'), validateBody(staffUpdateBodySchema), async (req, res, next) => {
   try {
     const config = getConfig(req, res);
     if (!config) return;
@@ -561,7 +602,7 @@ router.patch('/:kind/:id', async (req, res, next) => {
   }
 });
 
-router.patch('/:kind/:id/password', async (req, res, next) => {
+router.patch('/:kind/:id/password', adminWriteLimiter, validateObjectIdParams('id'), validateBody(staffPasswordBodySchema), async (req, res, next) => {
   try {
     const config = getConfig(req, res);
     if (!config) return;
@@ -630,7 +671,7 @@ router.patch('/:kind/:id/password', async (req, res, next) => {
   }
 });
 
-router.patch('/:kind/:id/status', async (req, res, next) => {
+router.patch('/:kind/:id/status', adminWriteLimiter, validateObjectIdParams('id'), validateBody(staffStatusBodySchema), async (req, res, next) => {
   try {
     const config = getConfig(req, res);
     if (!config) return;
@@ -654,7 +695,7 @@ router.patch('/:kind/:id/status', async (req, res, next) => {
   }
 });
 
-router.post('/:kind/:id/send-mail', async (req, res, next) => {
+router.post('/:kind/:id/send-mail', mailSendLimiter, validateObjectIdParams('id'), async (req, res, next) => {
   try {
     const config = getConfig(req, res);
     if (!config) return;
@@ -672,7 +713,7 @@ router.post('/:kind/:id/send-mail', async (req, res, next) => {
   }
 });
 
-router.delete('/:kind/:id', async (req, res, next) => {
+router.delete('/:kind/:id', adminWriteLimiter, validateObjectIdParams('id'), async (req, res, next) => {
   try {
     const config = getConfig(req, res);
     if (!config) return;

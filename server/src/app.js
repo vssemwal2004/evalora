@@ -3,15 +3,43 @@ const cors = require('cors');
 const express = require('express');
 const helmet = require('helmet');
 const morgan = require('morgan');
-const rateLimit = require('express-rate-limit');
 const env = require('./config/env');
 const routes = require('./routes');
 const { activityLogger } = require('./middleware/activityLogger');
 const { errorHandler, notFound } = require('./middleware/errorHandler');
+const { globalApiLimiter } = require('./middleware/rateLimit');
+const { rejectUnsafeRequestKeys } = require('./middleware/requestSecurity');
 
 const app = express();
 
 app.set('trust proxy', 1);
+app.disable('x-powered-by');
+
+const allowedOrigins = new Set(env.frontendOrigins);
+
+app.use(helmet());
+app.use(
+  cors({
+    origin(origin, callback) {
+      if (!origin || allowedOrigins.has(origin)) {
+        return callback(null, true);
+      }
+
+      const error = new Error('CORS origin is not allowed.');
+      error.statusCode = 403;
+      return callback(error);
+    },
+    credentials: true,
+  })
+);
+app.use(express.json({ limit: env.requestBodyLimit }));
+app.use(express.urlencoded({ extended: true, limit: env.requestBodyLimit }));
+app.use(rejectUnsafeRequestKeys);
+app.use(cookieParser());
+
+if (env.nodeEnv !== 'test') {
+  app.use(morgan('dev'));
+}
 
 app.get('/', (_req, res) => {
   res.json({
@@ -23,30 +51,7 @@ app.get('/', (_req, res) => {
   });
 });
 
-app.use(helmet());
-app.use(
-  cors({
-    origin: env.frontendUrl,
-    credentials: true,
-  })
-);
-app.use(express.json({ limit: '1mb' }));
-app.use(express.urlencoded({ extended: true }));
-app.use(cookieParser());
-
-if (env.nodeEnv !== 'test') {
-  app.use(morgan('dev'));
-}
-
-app.use(
-  '/api',
-  rateLimit({
-    windowMs: 15 * 60 * 1000,
-    limit: 600,
-    standardHeaders: true,
-    legacyHeaders: false,
-  })
-);
+app.use('/api', globalApiLimiter);
 
 app.use('/api', activityLogger, routes);
 

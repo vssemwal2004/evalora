@@ -2,9 +2,26 @@ const express = require('express');
 const Course = require('../models/Course');
 const { ROLES } = require('../constants/roles');
 const { authenticate, requirePermission, requireRole } = require('../middleware/auth');
+const { adminWriteLimiter, bulkImportLimiter } = require('../middleware/rateLimit');
+const { objectIdString, validateBody, validateObjectIdParams, z } = require('../middleware/validate');
 const { writeAuditLog } = require('../services/audit.service');
 
 const router = express.Router();
+const courseBodySchema = z.object({
+  courseName: z.string().trim().min(1, 'Course name is required.').max(200),
+  courseCode: z.string().trim().max(80).optional(),
+  courseId: z.string().trim().max(80).optional(),
+}).refine((value) => value.courseCode || value.courseId, 'Course code is required.');
+const bulkRowsBodySchema = z.object({
+  rows: z.array(z.record(z.unknown())).min(1, 'At least one course row is required.').max(1000, 'Upload limit is 1000 courses per import.'),
+});
+const courseStatusBodySchema = z.object({
+  status: z.enum(['active', 'archived']),
+});
+const courseBulkActionBodySchema = z.object({
+  courseIds: z.array(objectIdString).min(1, 'Select at least one course.').max(1000, 'Select 1000 courses or fewer.'),
+  action: z.enum(['hide', 'show', 'delete']),
+});
 
 router.use(authenticate, requireRole(ROLES.SUPER_ADMIN, ROLES.ADMIN));
 
@@ -145,7 +162,7 @@ router.get('/', requirePermission('course.view'), async (req, res, next) => {
   }
 });
 
-router.post('/', requirePermission('course.create'), async (req, res, next) => {
+router.post('/', adminWriteLimiter, validateBody(courseBodySchema), requirePermission('course.create'), async (req, res, next) => {
   try {
     const courseName = String(req.body.courseName || '').trim().replace(/\s+/g, ' ');
     const courseCode = String(req.body.courseCode || req.body.courseId || '').replace(/\s+/g, '').toUpperCase();
@@ -196,7 +213,7 @@ router.post('/', requirePermission('course.create'), async (req, res, next) => {
   }
 });
 
-router.post('/bulk-validate', requirePermission('course.create'), async (req, res, next) => {
+router.post('/bulk-validate', bulkImportLimiter, validateBody(bulkRowsBodySchema), requirePermission('course.create'), async (req, res, next) => {
   try {
     const rows = Array.isArray(req.body.rows) ? req.body.rows : [];
 
@@ -225,7 +242,7 @@ router.post('/bulk-validate', requirePermission('course.create'), async (req, re
   }
 });
 
-router.post('/bulk-save', requirePermission('course.create'), async (req, res, next) => {
+router.post('/bulk-save', bulkImportLimiter, validateBody(bulkRowsBodySchema), requirePermission('course.create'), async (req, res, next) => {
   try {
     const rows = Array.isArray(req.body.rows) ? req.body.rows : [];
 
@@ -282,7 +299,7 @@ router.post('/bulk-save', requirePermission('course.create'), async (req, res, n
   }
 });
 
-router.patch('/:id', requirePermission('course.edit'), async (req, res, next) => {
+router.patch('/:id', adminWriteLimiter, validateObjectIdParams('id'), validateBody(courseBodySchema), requirePermission('course.edit'), async (req, res, next) => {
   try {
     const course = await findScopedCourse(req, req.params.id);
     if (!course) {
@@ -342,7 +359,7 @@ router.patch('/:id', requirePermission('course.edit'), async (req, res, next) =>
   }
 });
 
-router.patch('/:id/status', requirePermission('course.archive'), async (req, res, next) => {
+router.patch('/:id/status', adminWriteLimiter, validateObjectIdParams('id'), validateBody(courseStatusBodySchema), requirePermission('course.archive'), async (req, res, next) => {
   try {
     const course = await findScopedCourse(req, req.params.id);
     if (!course) {
@@ -373,7 +390,7 @@ router.patch('/:id/status', requirePermission('course.archive'), async (req, res
   }
 });
 
-router.post('/bulk-action', requirePermission('course.archive'), async (req, res, next) => {
+router.post('/bulk-action', adminWriteLimiter, validateBody(courseBulkActionBodySchema), requirePermission('course.archive'), async (req, res, next) => {
   try {
     const courseIds = Array.isArray(req.body.courseIds) ? req.body.courseIds : [];
     const action = String(req.body.action || '').trim();
@@ -414,7 +431,7 @@ router.post('/bulk-action', requirePermission('course.archive'), async (req, res
   }
 });
 
-router.delete('/:id', requirePermission('course.archive'), async (req, res, next) => {
+router.delete('/:id', adminWriteLimiter, validateObjectIdParams('id'), requirePermission('course.archive'), async (req, res, next) => {
   try {
     const course = await findScopedCourse(req, req.params.id);
     if (!course) {

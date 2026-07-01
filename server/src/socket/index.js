@@ -6,8 +6,19 @@ const { verifyAuthToken } = require('../utils/tokens');
 
 const chatCache = new Map();
 const MAX_CHAT_MESSAGES = 100;
+const SOCKET_LIMITS = {
+  join: { windowMs: 60 * 1000, limit: 30 },
+  monitorRequest: { windowMs: 60 * 1000, limit: 30 },
+  monitorStop: { windowMs: 60 * 1000, limit: 60 },
+  sdp: { windowMs: 60 * 1000, limit: 30 },
+  iceCandidate: { windowMs: 60 * 1000, limit: 300 },
+  chatHistory: { windowMs: 60 * 1000, limit: 60 },
+  chatSend: { windowMs: 60 * 1000, limit: 30 },
+};
 
 async function authenticateSocket(socket) {
+  if (socket.data?.user) return socket.data.user;
+
   const token = socket.handshake.auth?.token || String(socket.handshake.headers.authorization || '').replace(/^Bearer\s+/i, '');
   if (!token) return null;
 
@@ -15,6 +26,7 @@ async function authenticateSocket(socket) {
     const payload = verifyAuthToken(token);
     const user = await User.findById(payload.sub);
     if (!user || user.status !== 'active') return null;
+    socket.data.user = user;
     return user;
   } catch (_error) {
     return null;
@@ -64,6 +76,28 @@ function ackError(ack, message) {
   if (typeof ack === 'function') ack({ ok: false, message });
 }
 
+function socketRateLimit(socket, bucket, policy, ack) {
+  const now = Date.now();
+  const limits = socket.data.rateLimits || new Map();
+  socket.data.rateLimits = limits;
+
+  const key = String(bucket);
+  const current = limits.get(key);
+  if (!current || current.resetAt <= now) {
+    limits.set(key, { count: 1, resetAt: now + policy.windowMs });
+    return true;
+  }
+
+  current.count += 1;
+  if (current.count > policy.limit) {
+    const retryAfter = Math.max(Math.ceil((current.resetAt - now) / 1000), 1);
+    ackError(ack, `Too many realtime requests. Try again in ${retryAfter}s.`);
+    return false;
+  }
+
+  return true;
+}
+
 function registerSocketHandlers(io) {
   io.on('connection', (socket) => {
     socket.emit('system:ready', {
@@ -72,6 +106,7 @@ function registerSocketHandlers(io) {
     });
 
     socket.on('proctor:join', async (payload = {}, ack) => {
+      if (!socketRateLimit(socket, 'proctor:join', SOCKET_LIMITS.join, ack)) return;
       const user = await authenticateSocket(socket);
       if (!user || user.role !== ROLES.PROCTOR) {
         if (typeof ack === 'function') ack({ ok: false, message: 'Authentication required.' });
@@ -94,6 +129,7 @@ function registerSocketHandlers(io) {
     });
 
     socket.on('student:join', async (payload = {}, ack) => {
+      if (!socketRateLimit(socket, 'student:join', SOCKET_LIMITS.join, ack)) return;
       const user = await authenticateSocket(socket);
       if (!user || user.role !== ROLES.STUDENT) {
         ackError(ack, 'Authentication required.');
@@ -112,6 +148,7 @@ function registerSocketHandlers(io) {
     });
 
     socket.on('proctor:monitor-request', async (payload = {}, ack) => {
+      if (!socketRateLimit(socket, 'proctor:monitor-request', SOCKET_LIMITS.monitorRequest, ack)) return;
       const user = await authenticateSocket(socket);
       if (!user || user.role !== ROLES.PROCTOR) {
         ackError(ack, 'Authentication required.');
@@ -139,6 +176,7 @@ function registerSocketHandlers(io) {
     });
 
     socket.on('student:webrtc-offer', async (payload = {}, ack) => {
+      if (!socketRateLimit(socket, 'student:webrtc-offer', SOCKET_LIMITS.sdp, ack)) return;
       const user = await authenticateSocket(socket);
       if (!user || user.role !== ROLES.STUDENT) {
         ackError(ack, 'Authentication required.');
@@ -173,6 +211,7 @@ function registerSocketHandlers(io) {
     });
 
     socket.on('proctor:webrtc-answer', async (payload = {}, ack) => {
+      if (!socketRateLimit(socket, 'proctor:webrtc-answer', SOCKET_LIMITS.sdp, ack)) return;
       const user = await authenticateSocket(socket);
       if (!user || user.role !== ROLES.PROCTOR) {
         ackError(ack, 'Authentication required.');
@@ -202,6 +241,7 @@ function registerSocketHandlers(io) {
     });
 
     socket.on('proctor:monitor-stop', async (payload = {}) => {
+      if (!socketRateLimit(socket, 'proctor:monitor-stop', SOCKET_LIMITS.monitorStop)) return;
       const user = await authenticateSocket(socket);
       if (!user || user.role !== ROLES.PROCTOR) return;
       const assignment = await findProctorAssignmentForStudent(user, payload.assignmentId, payload.studentId);
@@ -215,6 +255,7 @@ function registerSocketHandlers(io) {
     });
 
     socket.on('student:ice-candidate', async (payload = {}) => {
+      if (!socketRateLimit(socket, 'student:ice-candidate', SOCKET_LIMITS.iceCandidate)) return;
       const user = await authenticateSocket(socket);
       if (!user || user.role !== ROLES.STUDENT) return;
       const assignment = await findStudentAssignmentForSocket(user, payload.studentId);
@@ -232,6 +273,7 @@ function registerSocketHandlers(io) {
     });
 
     socket.on('proctor:ice-candidate', async (payload = {}) => {
+      if (!socketRateLimit(socket, 'proctor:ice-candidate', SOCKET_LIMITS.iceCandidate)) return;
       const user = await authenticateSocket(socket);
       if (!user || user.role !== ROLES.PROCTOR) return;
       const assignment = await findProctorAssignmentForStudent(user, payload.assignmentId, payload.studentId);
@@ -246,6 +288,7 @@ function registerSocketHandlers(io) {
     });
 
     socket.on('proctor:chat-history', async (payload = {}, ack) => {
+      if (!socketRateLimit(socket, 'proctor:chat-history', SOCKET_LIMITS.chatHistory, ack)) return;
       const user = await authenticateSocket(socket);
       if (!user || user.role !== ROLES.PROCTOR) {
         ackError(ack, 'Authentication required.');
@@ -262,6 +305,7 @@ function registerSocketHandlers(io) {
     });
 
     socket.on('proctor:chat-send', async (payload = {}, ack) => {
+      if (!socketRateLimit(socket, 'proctor:chat-send', SOCKET_LIMITS.chatSend, ack)) return;
       const user = await authenticateSocket(socket);
       if (!user || user.role !== ROLES.PROCTOR) {
         ackError(ack, 'Authentication required.');
@@ -291,6 +335,7 @@ function registerSocketHandlers(io) {
     });
 
     socket.on('student:chat-send', async (payload = {}, ack) => {
+      if (!socketRateLimit(socket, 'student:chat-send', SOCKET_LIMITS.chatSend, ack)) return;
       const user = await authenticateSocket(socket);
       if (!user || user.role !== ROLES.STUDENT) {
         ackError(ack, 'Authentication required.');

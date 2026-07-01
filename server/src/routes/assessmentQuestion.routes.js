@@ -6,12 +6,37 @@ const Question = require('../models/Question');
 const User = require('../models/User');
 const { ROLES } = require('../constants/roles');
 const { authenticate, requirePermission, requireRole } = require('../middleware/auth');
+const { adminWriteLimiter, bulkImportLimiter } = require('../middleware/rateLimit');
+const { objectIdString, validateBody, validateObjectIdParams, z } = require('../middleware/validate');
 const { writeAuditLog } = require('../services/audit.service');
 const { normalizeQuestionPayload, validateQuestionPayload } = require('../utils/questionValidation');
 
 const router = express.Router({ mergeParams: true });
+const courseReferenceSchema = z.object({
+  courseName: z.string().trim().max(200).optional(),
+  courseId: z.string().trim().max(80).optional(),
+  courseCode: z.string().trim().max(80).optional(),
+}).passthrough();
+const fromLibraryBodySchema = z.object({
+  questionIds: z.array(objectIdString).min(1, 'Select at least one library question.').max(500, 'Import 500 questions or fewer at once.'),
+});
+const fromLibraryHeadingBodySchema = z.object({
+  paperHeading: z.string().trim().min(1, 'Library heading is required.').max(300),
+  source: z.enum(['faculty', 'admin', 'both']).optional().default('both'),
+  course: courseReferenceSchema.optional(),
+  courseName: z.string().trim().max(200).optional(),
+  courseId: z.string().trim().max(80).optional(),
+  courseCode: z.string().trim().max(80).optional(),
+}).passthrough();
+const courseMappingBodySchema = z.object({
+  course: courseReferenceSchema.optional(),
+  courseName: z.string().trim().max(200).optional(),
+  courseId: z.string().trim().max(80).optional(),
+  courseCode: z.string().trim().max(80).optional(),
+}).passthrough();
 
 router.use(authenticate, requireRole(ROLES.SUPER_ADMIN, ROLES.ADMIN));
+router.use(validateObjectIdParams('assessmentId'));
 
 function getAssessmentScope(req) {
   return req.user.role === ROLES.SUPER_ADMIN ? {} : { ownerAdminId: req.user._id };
@@ -152,7 +177,7 @@ router.get('/', requirePermission('assessment.view'), async (req, res, next) => 
   }
 });
 
-router.post('/', requirePermission('assessment.edit'), async (req, res, next) => {
+router.post('/', adminWriteLimiter, requirePermission('assessment.edit'), async (req, res, next) => {
   try {
     const assessment = await findScopedAssessment(req);
     if (!assessment) {
@@ -208,7 +233,7 @@ router.post('/', requirePermission('assessment.edit'), async (req, res, next) =>
   }
 });
 
-router.post('/from-library', requirePermission('assessment.edit'), async (req, res, next) => {
+router.post('/from-library', bulkImportLimiter, validateBody(fromLibraryBodySchema), requirePermission('assessment.edit'), async (req, res, next) => {
   try {
     const assessment = await findScopedAssessment(req);
     if (!assessment) {
@@ -266,7 +291,7 @@ router.post('/from-library', requirePermission('assessment.edit'), async (req, r
   }
 });
 
-router.post('/from-library-heading', requirePermission('assessment.edit'), async (req, res, next) => {
+router.post('/from-library-heading', bulkImportLimiter, validateBody(fromLibraryHeadingBodySchema), requirePermission('assessment.edit'), async (req, res, next) => {
   try {
     const assessment = await findScopedAssessment(req);
     if (!assessment) {
@@ -397,7 +422,7 @@ router.post('/from-library-heading', requirePermission('assessment.edit'), async
   }
 });
 
-router.delete('/course-mapping', requirePermission('assessment.edit'), async (req, res, next) => {
+router.delete('/course-mapping', adminWriteLimiter, validateBody(courseMappingBodySchema), requirePermission('assessment.edit'), async (req, res, next) => {
   try {
     const assessment = await findScopedAssessment(req);
     if (!assessment) {

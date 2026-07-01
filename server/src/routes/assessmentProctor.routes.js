@@ -6,13 +6,25 @@ const AssessmentStudent = require('../models/AssessmentStudent');
 const ProctorProfile = require('../models/ProctorProfile');
 const { ROLES } = require('../constants/roles');
 const { authenticate, requirePermission, requireRole } = require('../middleware/auth');
+const { adminWriteLimiter, mailSendLimiter } = require('../middleware/rateLimit');
+const { validateBody, validateObjectIdParams, z } = require('../middleware/validate');
 const { writeAuditLog } = require('../services/audit.service');
 const { sendProctorCredentialMail } = require('../services/credentialMail.service');
 const { generatePassword, generateProctorId } = require('../utils/credentials');
 
 const router = express.Router({ mergeParams: true });
+const addProctorBodySchema = z.object({
+  name: z.string().trim().min(1, 'Proctor name is required.').max(160),
+  email: z.string().trim().toLowerCase().email('Valid proctor email is required.').max(320),
+  phone: z.string().trim().max(40).optional().default(''),
+  department: z.string().trim().max(160).optional().default(''),
+});
+const capacityBodySchema = z.object({
+  capacity: z.coerce.number().int().min(1).max(500).optional().default(50),
+});
 
 router.use(authenticate, requireRole(ROLES.SUPER_ADMIN, ROLES.ADMIN));
+router.use(validateObjectIdParams('assessmentId'));
 
 function getAssessmentScope(req) {
   return req.user.role === ROLES.SUPER_ADMIN ? {} : { ownerAdminId: req.user._id };
@@ -128,7 +140,7 @@ router.get('/', requirePermission('assessment.view'), async (req, res, next) => 
   }
 });
 
-router.post('/', requirePermission('proctor.add'), async (req, res, next) => {
+router.post('/', adminWriteLimiter, validateBody(addProctorBodySchema), requirePermission('proctor.add'), async (req, res, next) => {
   try {
     const assessment = await findScopedAssessment(req);
     if (!assessment) {
@@ -205,7 +217,7 @@ router.post('/', requirePermission('proctor.add'), async (req, res, next) => {
   }
 });
 
-router.post('/distribution-plan', requirePermission('proctor.add'), async (req, res, next) => {
+router.post('/distribution-plan', adminWriteLimiter, validateBody(capacityBodySchema), requirePermission('proctor.add'), async (req, res, next) => {
   try {
     const assessment = await findScopedAssessment(req);
     if (!assessment) {
@@ -224,7 +236,7 @@ router.post('/distribution-plan', requirePermission('proctor.add'), async (req, 
   }
 });
 
-router.post('/auto-assign', requirePermission('proctor.add'), async (req, res, next) => {
+router.post('/auto-assign', adminWriteLimiter, validateBody(capacityBodySchema), requirePermission('proctor.add'), async (req, res, next) => {
   try {
     const assessment = await findScopedAssessment(req);
     if (!assessment) {
@@ -314,7 +326,7 @@ router.post('/auto-assign', requirePermission('proctor.add'), async (req, res, n
   }
 });
 
-router.post('/send-mail', requirePermission('mail.send'), async (req, res, next) => {
+router.post('/send-mail', mailSendLimiter, requirePermission('mail.send'), async (req, res, next) => {
   try {
     const assessment = await findScopedAssessment(req);
     if (!assessment) {
@@ -369,7 +381,7 @@ router.post('/send-mail', requirePermission('mail.send'), async (req, res, next)
   }
 });
 
-router.post('/:proctorId/send-mail', requirePermission('mail.send'), async (req, res, next) => {
+router.post('/:proctorId/send-mail', mailSendLimiter, validateObjectIdParams('proctorId'), requirePermission('mail.send'), async (req, res, next) => {
   try {
     const assessment = await findScopedAssessment(req);
     if (!assessment) {
@@ -424,7 +436,7 @@ router.post('/:proctorId/send-mail', requirePermission('mail.send'), async (req,
   }
 });
 
-router.delete('/:proctorId', requirePermission('proctor.remove'), async (req, res, next) => {
+router.delete('/:proctorId', adminWriteLimiter, validateObjectIdParams('proctorId'), requirePermission('proctor.remove'), async (req, res, next) => {
   try {
     const assessment = await findScopedAssessment(req);
     if (!assessment) {

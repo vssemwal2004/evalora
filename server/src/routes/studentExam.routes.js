@@ -8,10 +8,54 @@ const AssessmentSecurityEvent = require('../models/AssessmentSecurityEvent');
 const AssessmentStudent = require('../models/AssessmentStudent');
 const { ROLES } = require('../constants/roles');
 const { authenticate, requireRole } = require('../middleware/auth');
+const {
+  examActionLimiter,
+  examAnswerLimiter,
+  examHeartbeatLimiter,
+  examSecurityEventLimiter,
+} = require('../middleware/rateLimit');
+const { objectIdString, validateBody, validateObjectIdParams, z } = require('../middleware/validate');
 
 const router = express.Router();
+const optionalObjectIdString = z.preprocess(
+  (value) => (value === '' || value === null ? undefined : value),
+  objectIdString.optional()
+);
+const setupStepBodySchema = z.object({
+  key: z.enum(['verify', 'instructions', 'browser', 'camera', 'microphone', 'fullscreen', 'final']),
+  status: z.enum(['passed', 'failed']).optional(),
+  message: z.string().trim().max(500).optional().default(''),
+});
+const answerBodySchema = z.object({
+  questionId: objectIdString,
+  selectedOptionId: optionalObjectIdString,
+  textAnswer: z.string().max(5000).optional().default(''),
+  markedForReview: z.boolean().optional().default(false),
+});
+const batchAnswersBodySchema = z.object({
+  answers: z.array(answerBodySchema).max(200, 'At most 200 answers can be saved at once.').default([]),
+});
+const validDateString = z.string().refine((value) => !Number.isNaN(new Date(value).getTime()), 'Invalid date.');
+const securityEventBodySchema = z.object({
+  type: z.string().trim().min(1).max(80),
+  severity: z.enum(['info', 'warning', 'critical']).optional().default('warning'),
+  score: z.coerce.number().min(0).max(100).optional().default(1),
+  message: z.string().trim().max(1000).optional().default(''),
+  metadata: z.record(z.unknown()).optional().default({}),
+  occurredAt: validDateString.optional(),
+});
+const recheckBodySchema = z.object({
+  checks: z.object({
+    visible: z.boolean().optional().default(false),
+    focused: z.boolean().optional().default(false),
+    fullscreen: z.boolean().optional().default(false),
+    camera: z.boolean().optional().default(false),
+    microphone: z.boolean().optional().default(false),
+  }).optional().default({}),
+});
 
 router.use(authenticate, requireRole(ROLES.STUDENT));
+router.use('/exams/:assignmentId', validateObjectIdParams('assignmentId'));
 
 const SECURITY_HOLD_TYPES = [
   'tab_switch',
@@ -471,7 +515,7 @@ router.post('/exams/:assignmentId/verify-password', (_req, res) => {
   return res.status(410).json({ message: 'Assessment password verification is no longer used.' });
 });
 
-router.post('/exams/:assignmentId/setup-step', async (req, res, next) => {
+router.post('/exams/:assignmentId/setup-step', examActionLimiter, validateBody(setupStepBodySchema), async (req, res, next) => {
   try {
     const found = await findStudentExam(req, req.params.assignmentId);
     if (!found) return res.status(404).json({ message: 'Assigned exam not found.' });
@@ -495,7 +539,7 @@ router.post('/exams/:assignmentId/setup-step', async (req, res, next) => {
   }
 });
 
-router.post('/exams/:assignmentId/start', async (req, res, next) => {
+router.post('/exams/:assignmentId/start', examActionLimiter, async (req, res, next) => {
   try {
     const found = await findStudentExam(req, req.params.assignmentId);
     if (!found) return res.status(404).json({ message: 'Assigned exam not found.' });
@@ -579,7 +623,7 @@ router.get('/exams/:assignmentId/attempt', async (req, res, next) => {
   }
 });
 
-router.post('/exams/:assignmentId/answers', async (req, res, next) => {
+router.post('/exams/:assignmentId/answers', examAnswerLimiter, validateBody(answerBodySchema), async (req, res, next) => {
   try {
     const found = await findStudentExam(req, req.params.assignmentId);
     if (!found) return res.status(404).json({ message: 'Assigned exam not found.' });
@@ -614,7 +658,7 @@ router.post('/exams/:assignmentId/answers', async (req, res, next) => {
   }
 });
 
-router.post('/exams/:assignmentId/answers/batch', async (req, res, next) => {
+router.post('/exams/:assignmentId/answers/batch', examAnswerLimiter, validateBody(batchAnswersBodySchema), async (req, res, next) => {
   try {
     const found = await findStudentExam(req, req.params.assignmentId);
     if (!found) return res.status(404).json({ message: 'Assigned exam not found.' });
@@ -653,7 +697,7 @@ router.post('/exams/:assignmentId/answers/batch', async (req, res, next) => {
   }
 });
 
-router.post('/exams/:assignmentId/heartbeat', async (req, res, next) => {
+router.post('/exams/:assignmentId/heartbeat', examHeartbeatLimiter, async (req, res, next) => {
   try {
     const found = await findStudentExam(req, req.params.assignmentId);
     if (!found) return res.status(404).json({ message: 'Assigned exam not found.' });
@@ -689,7 +733,7 @@ router.post('/exams/:assignmentId/heartbeat', async (req, res, next) => {
   }
 });
 
-router.post('/exams/:assignmentId/security-event', async (req, res, next) => {
+router.post('/exams/:assignmentId/security-event', examSecurityEventLimiter, validateBody(securityEventBodySchema), async (req, res, next) => {
   try {
     const found = await findStudentExam(req, req.params.assignmentId);
     if (!found) return res.status(404).json({ message: 'Assigned exam not found.' });
@@ -766,7 +810,7 @@ router.post('/exams/:assignmentId/security-event', async (req, res, next) => {
   }
 });
 
-router.post('/exams/:assignmentId/security-hold/return', async (req, res, next) => {
+router.post('/exams/:assignmentId/security-hold/return', examActionLimiter, async (req, res, next) => {
   try {
     const found = await findStudentExam(req, req.params.assignmentId);
     if (!found) return res.status(404).json({ message: 'Assigned exam not found.' });
@@ -801,7 +845,7 @@ router.post('/exams/:assignmentId/security-hold/return', async (req, res, next) 
   }
 });
 
-router.post('/exams/:assignmentId/security-hold/recheck', async (req, res, next) => {
+router.post('/exams/:assignmentId/security-hold/recheck', examActionLimiter, validateBody(recheckBodySchema), async (req, res, next) => {
   try {
     const found = await findStudentExam(req, req.params.assignmentId);
     if (!found) return res.status(404).json({ message: 'Assigned exam not found.' });
@@ -843,7 +887,7 @@ router.post('/exams/:assignmentId/security-hold/recheck', async (req, res, next)
   }
 });
 
-router.post('/exams/:assignmentId/submit', async (req, res, next) => {
+router.post('/exams/:assignmentId/submit', examActionLimiter, async (req, res, next) => {
   try {
     const found = await findStudentExam(req, req.params.assignmentId);
     if (!found) return res.status(404).json({ message: 'Assigned exam not found.' });

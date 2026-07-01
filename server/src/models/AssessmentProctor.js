@@ -95,6 +95,8 @@ const assessmentProctorSchema = new mongoose.Schema(
 );
 
 assessmentProctorSchema.index({ assessmentId: 1, email: 1 }, { unique: true });
+assessmentProctorSchema.index({ email: 1, updatedAt: -1 });
+assessmentProctorSchema.index({ assessmentId: 1, mailStatus: 1 });
 
 assessmentProctorSchema.pre('save', function syncCount(next) {
   this.assignedStudentCount = this.assignedStudents.length;

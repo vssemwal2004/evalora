@@ -5,10 +5,21 @@ const AssessmentStudent = require('../models/AssessmentStudent');
 const User = require('../models/User');
 const { ROLES } = require('../constants/roles');
 const { authenticate } = require('../middleware/auth');
+const { authLoginLimiter, passwordChangeLimiter } = require('../middleware/rateLimit');
+const { validateBody, z } = require('../middleware/validate');
 const { writeAuditLog } = require('../services/audit.service');
 const { signAuthToken } = require('../utils/tokens');
 
 const router = express.Router();
+const loginBodySchema = z.object({
+  identifier: z.string().trim().min(1, 'Login ID/email is required.').max(320),
+  password: z.string().min(1, 'Password is required.').max(200),
+});
+const passwordBodySchema = z.object({
+  currentPassword: z.string().min(1, 'Current password is required.').max(200),
+  newPassword: z.string().min(1, 'New password is required.').max(200),
+  confirmPassword: z.string().min(1, 'Confirm password is required.').max(200),
+});
 
 function isStrongPassword(password) {
   const value = String(password || '');
@@ -27,7 +38,7 @@ function serializeAuthUser(user) {
   };
 }
 
-router.post('/login', async (req, res, next) => {
+router.post('/login', authLoginLimiter, validateBody(loginBodySchema), async (req, res, next) => {
   try {
     const { identifier, password } = req.body;
 
@@ -157,7 +168,7 @@ router.get('/me', authenticate, (req, res) => {
   });
 });
 
-router.patch('/password', authenticate, async (req, res, next) => {
+router.patch('/password', authenticate, passwordChangeLimiter, validateBody(passwordBodySchema), async (req, res, next) => {
   try {
     const { currentPassword, newPassword, confirmPassword } = req.body;
 

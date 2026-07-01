@@ -2,9 +2,31 @@ const express = require('express');
 const User = require('../models/User');
 const { ADMIN_PERMISSIONS, ROLES } = require('../constants/roles');
 const { authenticate, requireRole } = require('../middleware/auth');
+const { adminWriteLimiter } = require('../middleware/rateLimit');
+const { validateBody, validateObjectIdParams, z } = require('../middleware/validate');
 const { writeAuditLog } = require('../services/audit.service');
 
 const router = express.Router();
+const adminPermissionSchema = z.string().refine((permission) => ADMIN_PERMISSIONS.includes(permission), 'Invalid permission.');
+const adminCreateBodySchema = z.object({
+  name: z.string().trim().min(1, 'Admin name is required.').max(160),
+  email: z.string().trim().toLowerCase().email('Valid admin email is required.').max(320),
+  password: z.string().min(1, 'Password is required.').max(200),
+  permissions: z.array(adminPermissionSchema).max(200).optional().default([]),
+});
+const adminUpdateBodySchema = z.object({
+  name: z.string().trim().min(1).max(160).optional(),
+  email: z.string().trim().toLowerCase().email().max(320).optional(),
+  permissions: z.array(adminPermissionSchema).max(200).optional(),
+  status: z.enum(['active', 'inactive', 'blocked']).optional(),
+}).refine((value) => Object.keys(value).length > 0, 'At least one field is required.');
+const adminPermissionsBodySchema = z.object({
+  permissions: z.array(adminPermissionSchema).max(200).optional().default([]),
+});
+const adminStatusBodySchema = z.object({
+  status: z.enum(['active', 'inactive', 'blocked']),
+  reason: z.string().trim().max(1000).optional().default(''),
+});
 
 router.use(authenticate, requireRole(ROLES.SUPER_ADMIN));
 
@@ -51,7 +73,7 @@ router.get('/admins', async (req, res, next) => {
   }
 });
 
-router.post('/admins', async (req, res, next) => {
+router.post('/admins', adminWriteLimiter, validateBody(adminCreateBodySchema), async (req, res, next) => {
   try {
     const { name, email, password, permissions = [] } = req.body;
 
@@ -168,7 +190,7 @@ router.post('/admins', async (req, res, next) => {
   }
 });
 
-router.patch('/admins/:id', async (req, res, next) => {
+router.patch('/admins/:id', adminWriteLimiter, validateObjectIdParams('id'), validateBody(adminUpdateBodySchema), async (req, res, next) => {
   try {
     const { name, email, permissions, status } = req.body;
     const admin = await User.findOne({ _id: req.params.id, role: ROLES.ADMIN });
@@ -257,7 +279,7 @@ router.patch('/admins/:id', async (req, res, next) => {
   }
 });
 
-router.patch('/admins/:id/permissions', async (req, res, next) => {
+router.patch('/admins/:id/permissions', adminWriteLimiter, validateObjectIdParams('id'), validateBody(adminPermissionsBodySchema), async (req, res, next) => {
   try {
     const { permissions = [] } = req.body;
     const invalidPermissions = permissions.filter((permission) => !ADMIN_PERMISSIONS.includes(permission));
@@ -290,7 +312,7 @@ router.patch('/admins/:id/permissions', async (req, res, next) => {
   }
 });
 
-router.patch('/admins/:id/status', async (req, res, next) => {
+router.patch('/admins/:id/status', adminWriteLimiter, validateObjectIdParams('id'), validateBody(adminStatusBodySchema), async (req, res, next) => {
   try {
     const { status, reason } = req.body;
 
@@ -323,7 +345,7 @@ router.patch('/admins/:id/status', async (req, res, next) => {
   }
 });
 
-router.delete('/admins/:id', async (req, res, next) => {
+router.delete('/admins/:id', adminWriteLimiter, validateObjectIdParams('id'), async (req, res, next) => {
   try {
     const admin = await User.findOne({ _id: req.params.id, role: ROLES.ADMIN });
 

@@ -93,5 +93,7 @@ const assessmentAttemptSchema = new mongoose.Schema(
 );
 
 assessmentAttemptSchema.index({ assessmentId: 1, assessmentStudentId: 1 }, { unique: true });
+assessmentAttemptSchema.index({ assessmentId: 1, status: 1, lastHeartbeatAt: -1 });
+assessmentAttemptSchema.index({ ownerAdminId: 1, status: 1, updatedAt: -1 });
 
 module.exports = mongoose.model('AssessmentAttempt', assessmentAttemptSchema);

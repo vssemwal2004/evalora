@@ -3,10 +3,39 @@ const Question = require('../models/Question');
 const User = require('../models/User');
 const { ROLES } = require('../constants/roles');
 const { authenticate, requirePermission, requireRole } = require('../middleware/auth');
+const { adminWriteLimiter, bulkImportLimiter } = require('../middleware/rateLimit');
+const { validateBody, validateObjectIdParams, z } = require('../middleware/validate');
 const { writeAuditLog } = require('../services/audit.service');
 const { normalizeQuestionPayload, validateQuestionPayload } = require('../utils/questionValidation');
 
 const router = express.Router();
+const headingBodySchema = z.object({
+  currentHeading: z.string().trim().min(1).max(300),
+  nextHeading: z.string().trim().min(1).max(300),
+});
+const deleteHeadingBodySchema = z.object({
+  paperHeading: z.string().trim().min(1).max(300),
+});
+const questionBulkBodySchema = z.object({
+  rows: z.array(z.record(z.unknown())).min(1, 'At least one question row is required.').max(1000, 'Upload limit is 1000 questions per import.'),
+  paperHeading: z.string().trim().max(300).optional().default(''),
+});
+const questionWriteBodySchema = z.object({
+  paperHeading: z.string().trim().max(300).optional(),
+  type: z.enum(['mcq', 'one_word']).optional(),
+  questionText: z.string().trim().max(10000).optional(),
+  options: z.array(z.object({
+    text: z.string().trim().max(2000).optional().default(''),
+    isCorrect: z.boolean().optional().default(false),
+  }).passthrough()).max(20).optional(),
+  expectedAnswer: z.string().trim().max(2000).optional(),
+  alternateAnswers: z.union([z.string().trim().max(5000), z.array(z.string().trim().max(500)).max(50)]).optional(),
+  positiveMarks: z.coerce.number().min(0).max(1000).optional(),
+  negativeMarks: z.coerce.number().min(0).max(1000).optional(),
+  difficulty: z.string().trim().max(50).optional(),
+  tags: z.union([z.string().trim().max(2000), z.array(z.string().trim().max(100)).max(50)]).optional(),
+  explanation: z.string().trim().max(5000).optional(),
+}).passthrough();
 
 router.use(authenticate, requireRole(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.FACULTY));
 
@@ -210,7 +239,7 @@ router.get('/groups', requirePermission('library.view'), async (req, res, next) 
   }
 });
 
-router.patch('/groups', requirePermission('library.edit'), async (req, res, next) => {
+router.patch('/groups', adminWriteLimiter, validateBody(headingBodySchema), requirePermission('library.edit'), async (req, res, next) => {
   try {
     const currentHeading = normalizeHeading(req.body.currentHeading);
     const nextHeading = normalizeHeading(req.body.nextHeading);
@@ -250,7 +279,7 @@ router.patch('/groups', requirePermission('library.edit'), async (req, res, next
   }
 });
 
-router.delete('/groups', requirePermission('library.archive'), async (req, res, next) => {
+router.delete('/groups', adminWriteLimiter, validateBody(deleteHeadingBodySchema), requirePermission('library.archive'), async (req, res, next) => {
   try {
     const paperHeading = normalizeHeading(req.body.paperHeading);
 
@@ -337,7 +366,7 @@ router.get('/questions', requirePermission('library.view'), async (req, res, nex
   }
 });
 
-router.patch('/questions/:id', requirePermission('library.edit'), async (req, res, next) => {
+router.patch('/questions/:id', adminWriteLimiter, validateObjectIdParams('id'), validateBody(questionWriteBodySchema), requirePermission('library.edit'), async (req, res, next) => {
   try {
     const question = await Question.findOne({
       _id: req.params.id,
@@ -395,7 +424,7 @@ router.patch('/questions/:id', requirePermission('library.edit'), async (req, re
   }
 });
 
-router.delete('/questions/:id', requirePermission('library.archive'), async (req, res, next) => {
+router.delete('/questions/:id', adminWriteLimiter, validateObjectIdParams('id'), requirePermission('library.archive'), async (req, res, next) => {
   try {
     const question = await Question.findOne({
       _id: req.params.id,
@@ -426,7 +455,7 @@ router.delete('/questions/:id', requirePermission('library.archive'), async (req
   }
 });
 
-router.post('/questions/validate', requirePermission('library.create'), async (req, res, next) => {
+router.post('/questions/validate', bulkImportLimiter, validateBody(questionBulkBodySchema), requirePermission('library.create'), async (req, res, next) => {
   try {
     const rows = Array.isArray(req.body.rows) ? req.body.rows : [];
     const paperHeading = String(req.body.paperHeading || '').trim();
@@ -457,7 +486,7 @@ router.post('/questions/validate', requirePermission('library.create'), async (r
   }
 });
 
-router.post('/questions/bulk', requirePermission('library.create'), async (req, res, next) => {
+router.post('/questions/bulk', bulkImportLimiter, validateBody(questionBulkBodySchema), requirePermission('library.create'), async (req, res, next) => {
   try {
     const rows = Array.isArray(req.body.rows) ? req.body.rows : [];
     const paperHeading = String(req.body.paperHeading || '').trim();
@@ -510,7 +539,7 @@ router.post('/questions/bulk', requirePermission('library.create'), async (req, 
   }
 });
 
-router.post('/questions', requirePermission('library.create'), async (req, res, next) => {
+router.post('/questions', adminWriteLimiter, validateBody(questionWriteBodySchema), requirePermission('library.create'), async (req, res, next) => {
   try {
     const draft = {
       ...req.body,

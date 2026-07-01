@@ -6,12 +6,22 @@ const AssessmentSecurityEvent = require('../models/AssessmentSecurityEvent');
 const AssessmentStudent = require('../models/AssessmentStudent');
 const { ROLES } = require('../constants/roles');
 const { authenticate, requireRole } = require('../middleware/auth');
+const { proctorActionLimiter, proctorVerifyLimiter } = require('../middleware/rateLimit');
+const { validateBody, validateObjectIdParams, z } = require('../middleware/validate');
 const { writeAuditLog } = require('../services/audit.service');
 const User = require('../models/User');
 
 const router = express.Router();
+const proctorVerifyBodySchema = z.object({
+  password: z.string().min(1, 'Assessment password is required.').max(200),
+});
+const ufmBodySchema = z.object({
+  reason: z.string().trim().min(1, 'UFM reason is required.').max(2000),
+});
 
 router.use(authenticate, requireRole(ROLES.PROCTOR));
+router.use('/assignments/:assignmentId', validateObjectIdParams('assignmentId'));
+router.use('/assignments/:assignmentId/students/:studentId', validateObjectIdParams('studentId'));
 
 function serializeWindow(assessment) {
   return {
@@ -118,7 +128,7 @@ router.get('/assignments', async (req, res, next) => {
   }
 });
 
-router.post('/assignments/:assignmentId/verify', async (req, res, next) => {
+router.post('/assignments/:assignmentId/verify', proctorVerifyLimiter, validateBody(proctorVerifyBodySchema), async (req, res, next) => {
   try {
     const assignment = await findProctorAssignment(req, req.params.assignmentId);
 
@@ -226,7 +236,7 @@ router.post('/assignments/:assignmentId/verify', async (req, res, next) => {
   }
 });
 
-router.post('/assignments/:assignmentId/students/:studentId/ufm', async (req, res, next) => {
+router.post('/assignments/:assignmentId/students/:studentId/ufm', proctorActionLimiter, validateBody(ufmBodySchema), async (req, res, next) => {
   try {
     const assignment = await AssessmentProctor.findOne({
       _id: req.params.assignmentId,
