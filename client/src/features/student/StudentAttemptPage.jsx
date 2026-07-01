@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { io } from 'socket.io-client';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
   AlertTriangle,
@@ -26,6 +27,26 @@ import { api } from '../../lib/api';
 
 const HARD_SECURITY_HOLD_TYPES = ['tab_switch', 'window_blur', 'fullscreen_exit', 'screenshot_attempt', 'duplicate_tab', 'shortcut_attempt', 'idle_detected'];
 const PROCTOR_ONLY_TYPES = ['camera_missing', 'microphone_missing', 'camera_movement', 'ai_unavailable', 'ai_no_face', 'ai_multiple_faces', 'ai_looking_away', 'ai_camera_blocked', 'ai_mobile_detected', 'noise_detected'];
+
+function socketUrl() {
+  const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+  return apiBase.replace(/\/api\/?$/, '');
+}
+
+function getIceServers() {
+  const raw = import.meta.env.VITE_WEBRTC_ICE_SERVERS;
+  if (!raw) return [{ urls: 'stun:stun.l.google.com:19302' }];
+
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+  } catch {
+    // Allow simple comma-separated STUN/TURN URLs in local env files.
+  }
+
+  const urls = raw.split(',').map((item) => item.trim()).filter(Boolean);
+  return urls.length ? urls.map((url) => ({ urls: url })) : [{ urls: 'stun:stun.l.google.com:19302' }];
+}
 
 function formatTime(ms) {
   const safeMs = Math.max(Number(ms || 0), 0);
@@ -231,9 +252,16 @@ export function StudentAttemptPage() {
   const fallbackFaceModelRef = useRef(null);
   const fallbackFaceModelLoadingRef = useRef(false);
   const mediaStreamRef = useRef(null);
+  const liveMediaStreamRef = useRef(null);
+  const proctorPeerRef = useRef(null);
+  const studentSocketRef = useRef(null);
+  const liveSessionRef = useRef(null);
   const movementCanvasRef = useRef(null);
   const lastFrameRef = useRef(null);
   const autoSubmitRef = useRef(false);
+  const [proctorLiveStatus, setProctorLiveStatus] = useState('idle');
+  const [proctorChatMessages, setProctorChatMessages] = useState([]);
+  const [proctorChatDraft, setProctorChatDraft] = useState('');
   const currentQuestion = questions[activeIndex];
   const currentAnswer = currentQuestion ? answers[currentQuestion.id] || {} : {};
   const activeSecurityHold = securityHold?.active && HARD_SECURITY_HOLD_TYPES.includes(securityHold.triggerType);
@@ -358,6 +386,136 @@ export function StudentAttemptPage() {
         : buildLocalSecurityHold(type, reason, phase)
     ));
   }, []);
+
+  useEffect(() => {
+    if (!exam || !assignmentId) return undefined;
+
+    const token = localStorage.getItem('evalora_token');
+    const socket = io(socketUrl(), {
+      auth: { token },
+      transports: ['websocket', 'polling'],
+    });
+    studentSocketRef.current = socket;
+
+    socket.emit('student:join', { assignmentId }, (ack) => {
+      if (!ack?.ok) setError(ack?.message || 'Unable to join live proctoring channel.');
+    });
+
+    async function getLiveStream() {
+      if (mediaStreamRef.current?.getTracks().some((track) => track.readyState === 'live')) return mediaStreamRef.current;
+      if (liveMediaStreamRef.current?.getTracks().some((track) => track.readyState === 'live')) return liveMediaStreamRef.current;
+
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: true,
+        audio: Boolean(exam.settings?.microphoneRequired || exam.settings?.microphoneMonitoring),
+      });
+      liveMediaStreamRef.current = stream;
+      return stream;
+    }
+
+    async function handleMonitorRequest(payload) {
+      try {
+        if (proctorPeerRef.current) proctorPeerRef.current.close();
+
+        const stream = await getLiveStream();
+        const peer = new RTCPeerConnection({ iceServers: getIceServers() });
+        proctorPeerRef.current = peer;
+        liveSessionRef.current = payload;
+        setProctorLiveStatus('sharing');
+
+        stream.getTracks().forEach((track) => peer.addTrack(track, stream));
+        peer.onicecandidate = (event) => {
+          if (event.candidate) {
+            socket.emit('student:ice-candidate', {
+              assignmentId: payload.assignmentId,
+              studentId: assignmentId,
+              sessionId: payload.sessionId,
+              candidate: event.candidate,
+            });
+          }
+        };
+        peer.onconnectionstatechange = () => {
+          if (['failed', 'disconnected', 'closed'].includes(peer.connectionState)) setProctorLiveStatus('idle');
+        };
+
+        const offer = await peer.createOffer();
+        await peer.setLocalDescription(offer);
+        socket.emit('student:webrtc-offer', {
+          assignmentId: payload.assignmentId,
+          studentId: assignmentId,
+          sessionId: payload.sessionId,
+          sdp: offer,
+        });
+      } catch {
+        setProctorLiveStatus('blocked');
+        sendSecurityEvent('camera_missing', {
+          message: 'Proctor requested live monitoring but camera or microphone access was unavailable.',
+          severity: 'warning',
+          metadata: { source: 'proctor_live_request' },
+        });
+      }
+    }
+
+    async function handleAnswer(payload) {
+      if (!proctorPeerRef.current || String(payload?.sessionId) !== String(liveSessionRef.current?.sessionId)) return;
+      try {
+        await proctorPeerRef.current.setRemoteDescription(new RTCSessionDescription(payload.sdp));
+        setProctorLiveStatus('connected');
+      } catch {
+        setProctorLiveStatus('blocked');
+      }
+    }
+
+    async function handleIceCandidate(payload) {
+      if (!proctorPeerRef.current || String(payload?.sessionId) !== String(liveSessionRef.current?.sessionId)) return;
+      try {
+        await proctorPeerRef.current.addIceCandidate(new RTCIceCandidate(payload.candidate));
+      } catch {
+        // Ignore stale candidates after the live monitor was closed.
+      }
+    }
+
+    function handleMonitorStop(payload) {
+      if (payload?.sessionId && String(payload.sessionId) !== String(liveSessionRef.current?.sessionId)) return;
+      if (proctorPeerRef.current) proctorPeerRef.current.close();
+      proctorPeerRef.current = null;
+      setProctorLiveStatus('idle');
+    }
+
+    function handleChatMessage(message) {
+      if (String(message.studentId) === String(assignmentId)) {
+        liveSessionRef.current = liveSessionRef.current || {
+          assignmentId: message.assignmentId,
+          studentId: assignmentId,
+          sessionId: null,
+        };
+        setProctorChatMessages((current) => [...current, message].slice(-100));
+      }
+    }
+
+    socket.on('student:monitor-request', handleMonitorRequest);
+    socket.on('student:webrtc-answer', handleAnswer);
+    socket.on('student:ice-candidate', handleIceCandidate);
+    socket.on('student:monitor-stop', handleMonitorStop);
+    socket.on('proctor:chat-message', handleChatMessage);
+
+    return () => {
+      socket.off('student:monitor-request', handleMonitorRequest);
+      socket.off('student:webrtc-answer', handleAnswer);
+      socket.off('student:ice-candidate', handleIceCandidate);
+      socket.off('student:monitor-stop', handleMonitorStop);
+      socket.off('proctor:chat-message', handleChatMessage);
+      socket.disconnect();
+      studentSocketRef.current = null;
+      if (proctorPeerRef.current) proctorPeerRef.current.close();
+      proctorPeerRef.current = null;
+      if (liveMediaStreamRef.current) {
+        liveMediaStreamRef.current.getTracks().forEach((track) => track.stop());
+        liveMediaStreamRef.current = null;
+      }
+      setProctorLiveStatus('idle');
+    };
+  }, [assignmentId, exam, sendSecurityEvent]);
 
   useEffect(() => {
     if (!exam?.settings) return undefined;
@@ -1074,6 +1232,25 @@ export function StudentAttemptPage() {
     }
   }, [answers, assignmentId, navigate, questions]);
 
+  function sendProctorChat(event) {
+    event.preventDefault();
+    const text = proctorChatDraft.trim();
+    const assignment = liveSessionRef.current;
+    if (!text || !studentSocketRef.current || !assignment?.assignmentId) return;
+
+    studentSocketRef.current.emit('student:chat-send', {
+      assignmentId: assignment.assignmentId,
+      studentId: assignmentId,
+      text,
+    }, (ack) => {
+      if (!ack?.ok) {
+        setError(ack?.message || 'Unable to send proctor chat message.');
+        return;
+      }
+      setProctorChatDraft('');
+    });
+  }
+
   useEffect(() => {
     if (remainingMs === null || remainingMs > 0 || !exam || autoSubmitRef.current) return;
     autoSubmitRef.current = true;
@@ -1294,6 +1471,49 @@ export function StudentAttemptPage() {
           ); })}
         </div>
       </footer>
+
+      {(proctorLiveStatus !== 'idle' || proctorChatMessages.length > 0) ? (
+        <div className="fixed bottom-14 right-4 z-40 w-[min(360px,calc(100vw-2rem))] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl">
+          <div className="flex items-center justify-between border-b border-slate-200 bg-slate-50 px-3 py-2">
+            <div className="flex items-center gap-2">
+              <span className={`h-2.5 w-2.5 rounded-full ${proctorLiveStatus === 'connected' ? 'bg-green-500' : proctorLiveStatus === 'blocked' ? 'bg-red-500' : 'bg-amber-500'}`} />
+              <p className="text-xs font-bold text-slate-800">
+                {proctorLiveStatus === 'connected' ? 'Proctor live connected' : proctorLiveStatus === 'blocked' ? 'Live monitor blocked' : 'Proctor live monitor'}
+              </p>
+            </div>
+            <span className="text-[10px] font-bold uppercase text-slate-400">Chat</span>
+          </div>
+          <div className="max-h-44 space-y-2 overflow-y-auto p-3">
+            {proctorChatMessages.length === 0 ? (
+              <p className="text-xs font-semibold text-slate-400">No proctor messages yet.</p>
+            ) : (
+              proctorChatMessages.map((message) => (
+                <div
+                  key={message.id}
+                  className={`max-w-[88%] rounded-lg px-3 py-2 text-xs font-semibold leading-5 ${
+                    message.senderRole === 'student' ? 'ml-auto bg-brand-500 text-white' : 'bg-slate-100 text-slate-700'
+                  }`}
+                >
+                  <p>{message.text}</p>
+                  <p className={`mt-1 text-[10px] ${message.senderRole === 'student' ? 'text-brand-50/80' : 'text-slate-400'}`}>{message.senderName}</p>
+                </div>
+              ))
+            )}
+          </div>
+          <form className="flex gap-2 border-t border-slate-200 p-3" onSubmit={sendProctorChat}>
+            <input
+              className="field-input h-9 text-sm"
+              value={proctorChatDraft}
+              onChange={(event) => setProctorChatDraft(event.target.value)}
+              placeholder="Reply to proctor"
+              disabled={!liveSessionRef.current?.assignmentId}
+            />
+            <button className="primary-button h-9 px-3 text-xs" type="submit" disabled={!proctorChatDraft.trim() || !liveSessionRef.current?.assignmentId}>
+              <Send size={14} />
+            </button>
+          </form>
+        </div>
+      ) : null}
 
       {isSubmitOpen ? <SubmitDialog summary={summary} isSubmitting={isSubmitting} onCancel={() => setIsSubmitOpen(false)} onConfirm={submitAttempt} /> : null}
       {securityHold?.active && HARD_SECURITY_HOLD_TYPES.includes(securityHold.triggerType) ? (

@@ -3,6 +3,7 @@ const Assessment = require('../models/Assessment');
 const AssessmentAnswer = require('../models/AssessmentAnswer');
 const AssessmentAttempt = require('../models/AssessmentAttempt');
 const AssessmentQuestion = require('../models/AssessmentQuestion');
+const AssessmentProctor = require('../models/AssessmentProctor');
 const AssessmentSecurityEvent = require('../models/AssessmentSecurityEvent');
 const AssessmentStudent = require('../models/AssessmentStudent');
 const { ROLES } = require('../constants/roles');
@@ -110,6 +111,60 @@ function serializeExam({ assignment, assessment, attempt, questionSummary }) {
       : null,
     questionSummary,
   };
+}
+
+function serializeProctorStudentUpdate({ assignment, attempt, alertCount = 0 }) {
+  return {
+    id: assignment._id,
+    name: assignment.name,
+    email: assignment.email,
+    applicationNumber: assignment.applicationNumber,
+    courseName: assignment.courseName,
+    courseId: assignment.courseId,
+    examId: assignment.generatedExamId,
+    examStatus: assignment.examStatus,
+    mailStatus: assignment.mailStatus,
+    attemptStatus: attempt?.status || 'not_started',
+    lastHeartbeatAt: attempt?.lastHeartbeatAt,
+    securityScore: attempt?.securityScore || 0,
+    alertCount,
+  };
+}
+
+async function emitProctorStudentUpdate(req, { assessment, assignment, attempt, event = null }) {
+  const io = req.app.get('io');
+  if (!io) return;
+
+  const proctorAssignment = await AssessmentProctor.findOne({
+    assessmentId: assessment._id,
+    'assignedStudents.assessmentStudentId': assignment._id,
+  }).lean();
+
+  if (!proctorAssignment) return;
+
+  const alertCount = await AssessmentSecurityEvent.countDocuments({
+    assessmentId: assessment._id,
+    assessmentStudentId: assignment._id,
+    severity: { $in: ['warning', 'critical'] },
+  });
+
+  const payload = {
+    assessmentId: assessment._id,
+    proctorAssignmentId: proctorAssignment._id,
+    student: serializeProctorStudentUpdate({ assignment, attempt, alertCount }),
+    event: event
+      ? {
+          id: event._id,
+          studentId: event.assessmentStudentId,
+          type: event.type,
+          severity: event.severity,
+          message: event.message,
+          occurredAt: event.occurredAt,
+        }
+      : null,
+  };
+
+  io.to(`proctor:${proctorAssignment._id}`).emit(event ? 'proctor:security-event' : 'proctor:student-update', payload);
 }
 
 function serializeQuestion(question) {
@@ -472,6 +527,7 @@ router.post('/exams/:assignmentId/start', async (req, res, next) => {
 
     assignment.examStatus = 'in_progress';
     await assignment.save();
+    await emitProctorStudentUpdate(req, { assessment, assignment, attempt });
 
     return res.json({
       attempt,
@@ -625,6 +681,7 @@ router.post('/exams/:assignmentId/heartbeat', async (req, res, next) => {
     }
     attempt.lastHeartbeatAt = now;
     await attempt.save();
+    await emitProctorStudentUpdate(req, { assessment, assignment, attempt });
 
     return res.json({ heartbeatAt: attempt.lastHeartbeatAt, securityHold: attempt.securityHold, allowedEndAt: attempt.allowedEndAt });
   } catch (error) {
@@ -692,6 +749,7 @@ router.post('/exams/:assignmentId/security-event', async (req, res, next) => {
 
     attempt.lastHeartbeatAt = new Date();
     await attempt.save();
+    await emitProctorStudentUpdate(req, { assessment, assignment, attempt, event });
 
     return res.status(201).json({
       event,

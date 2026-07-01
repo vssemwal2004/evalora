@@ -6,6 +6,7 @@ const User = require('../models/User');
 const { ROLES } = require('../constants/roles');
 const { authenticate, requirePermission, requireRole } = require('../middleware/auth');
 const { writeAuditLog } = require('../services/audit.service');
+const { sendStudentCredentialMail } = require('../services/credentialMail.service');
 
 const router = express.Router();
 
@@ -255,6 +256,48 @@ router.patch('/:id/status', requirePermission('student.edit'), async (req, res, 
 
     return res.json({ item: serializeStudent(student) });
   } catch (error) {
+    return next(error);
+  }
+});
+
+router.post('/:id/send-mail', requirePermission('mail.send'), async (req, res, next) => {
+  let student;
+
+  try {
+    student = await AssessmentStudent.findOne({ _id: req.params.id, ...getStudentScope(req) })
+      .select('+passwordPreview')
+      .populate('assessmentId', 'title assessmentCode status startAt endAt globalDurationMinutes');
+
+    if (!student) return res.status(404).json({ message: 'Student not found.' });
+    if (!student.assessmentId) return res.status(404).json({ message: 'Assessment was not found for this student.' });
+
+    await sendStudentCredentialMail({ assessment: student.assessmentId, student });
+
+    student.mailStatus = ['sent', 'resent'].includes(student.mailStatus) ? 'resent' : 'sent';
+    await student.save();
+
+    await writeAuditLog(req, {
+      action: 'assessment.student.send_mail',
+      targetType: 'AssessmentStudent',
+      targetId: student._id,
+      newValue: {
+        assessmentId: student.assessmentId._id,
+        email: student.email,
+        mailStatus: student.mailStatus,
+        source: 'student_directory',
+      },
+    });
+
+    return res.json({
+      item: serializeStudent(student),
+      message: 'Student credential mail sent successfully.',
+    });
+  } catch (error) {
+    if (student) {
+      student.mailStatus = 'failed';
+      await student.save().catch(() => null);
+    }
+
     return next(error);
   }
 });

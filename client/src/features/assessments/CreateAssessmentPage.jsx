@@ -58,8 +58,14 @@ const defaultSettings = {
   passwordRequired: false,
   proctoringEnabled: false,
   chatEnabled: false,
+  proctorGlobalChatEnabled: true,
   warningMessagesEnabled: true,
   ufmActionEnabled: true,
+  screenMonitoringEnabled: false,
+  liveStatusPollingSeconds: 10,
+  maxStudentsPerProctor: 50,
+  suspiciousActivityThresholdPerMinute: 5,
+  proctorAlertPopupEnabled: true,
   fullscreenEnabled: true,
   requireFullscreenBeforeStart: true,
   maxFullscreenExits: 3,
@@ -122,8 +128,14 @@ const settingGroups = [
     controls: [
       { type: 'toggle', key: 'proctoringEnabled', label: 'Enable live proctoring' },
       { type: 'toggle', key: 'chatEnabled', label: 'Enable proctor-student chat' },
+      { type: 'toggle', key: 'proctorGlobalChatEnabled', label: 'Enable assessment-wide proctor chat' },
       { type: 'toggle', key: 'warningMessagesEnabled', label: 'Allow warning messages' },
       { type: 'toggle', key: 'ufmActionEnabled', label: 'Allow UFM action' },
+      { type: 'toggle', key: 'screenMonitoringEnabled', label: 'Allow screen monitoring status' },
+      { type: 'toggle', key: 'proctorAlertPopupEnabled', label: 'Show high-activity proctor popup' },
+      { type: 'number', key: 'maxStudentsPerProctor', label: 'Max students per proctor', min: 1 },
+      { type: 'number', key: 'liveStatusPollingSeconds', label: 'Live status refresh seconds', min: 3 },
+      { type: 'number', key: 'suspiciousActivityThresholdPerMinute', label: 'Suspicious events per minute', min: 1 },
     ],
   },
   {
@@ -1300,6 +1312,22 @@ export function CreateAssessmentPage() {
     }
   }
 
+  function getExitPath(assessment = draftAssessment) {
+    if (assessment?.status === 'review') {
+      return `${roleBase}/assessments/review`;
+    }
+
+    return overviewPath;
+  }
+
+  async function handleSaveAndExit() {
+    const assessment = await saveAssessmentDraft({ requireFullValidation: false });
+
+    if (assessment?._id) {
+      navigate(getExitPath(assessment), { replace: true });
+    }
+  }
+
   async function openQuestionLibrary(mode) {
     if (assessmentCourses.length === 0) {
       setActiveStep(1);
@@ -1398,10 +1426,16 @@ export function CreateAssessmentPage() {
                 {isDraftSaved ? 'Draft saved' : 'Not saved'}
               </span>
             </div>
-            <button className="secondary-button mt-3 h-9 w-full justify-center text-xs" type="button" onClick={handleSaveDraftClick} disabled={isSaving}>
-              <Save size={16} className="text-brand-500" />
-              {isSaving ? 'Saving Draft' : isDraftSaved ? 'Update Draft' : 'Save in Draft'}
-            </button>
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              <button className="secondary-button h-9 justify-center px-2 text-xs" type="button" onClick={handleSaveDraftClick} disabled={isSaving}>
+                <Save size={15} className="text-brand-500" />
+                {isSaving ? 'Saving' : isDraftSaved ? 'Update' : 'Save'}
+              </button>
+              <button className="primary-button h-9 justify-center px-2 text-xs" type="button" onClick={handleSaveAndExit} disabled={isSaving}>
+                <Save size={15} />
+                Save & Exit
+              </button>
+            </div>
           </div>
         </div>
 
@@ -2118,19 +2152,29 @@ export function CreateAssessmentPage() {
           ) : null}
         </div>
 
-        <div className="flex justify-between border-t border-slate-200 bg-slate-50 px-5 py-4">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 bg-slate-50 px-5 py-4">
           <button className="secondary-button" type="button" onClick={() => setActiveStep((step) => Math.max(step - 1, 0))}>
             Back
           </button>
           {activeStep < steps.length - 1 ? (
-            <button className="primary-button" type="button" onClick={handleNext} disabled={isSaving}>
-              {isSaving && (activeStep === 0 || activeStep === 1 || activeStep >= 3) ? 'Saving Draft' : 'Next'}
-            </button>
+            <div className="flex flex-wrap justify-end gap-2">
+              <button className="secondary-button" type="button" onClick={handleSaveAndExit} disabled={isSaving}>
+                <Save size={17} className="text-brand-500" />
+                {isSaving ? 'Saving' : 'Save & Exit'}
+              </button>
+              <button className="primary-button" type="button" onClick={handleNext} disabled={isSaving}>
+                {isSaving && (activeStep === 0 || activeStep === 1 || activeStep >= 3) ? 'Saving Draft' : 'Next'}
+              </button>
+            </div>
           ) : (
             <div className="flex flex-wrap justify-end gap-2">
               <button className="secondary-button" type="button" onClick={handleSubmit} disabled={isSaving || isPublishing || basicValidation.length > 0}>
                 <Save size={17} className="text-brand-500" />
                 {isSaving ? 'Saving draft' : 'Save Draft'}
+              </button>
+              <button className="secondary-button" type="button" onClick={handleSaveAndExit} disabled={isSaving || isPublishing || basicValidation.length > 0}>
+                <Save size={17} className="text-brand-500" />
+                {isSaving ? 'Saving' : 'Save & Exit'}
               </button>
               <button
                 className="primary-button"

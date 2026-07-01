@@ -416,7 +416,7 @@ export const router = createBrowserRouter([
         children: [
           {
             index: true,
-            element: page(DashboardPlaceholder, { title: 'Proctor Monitoring Dashboard' }),
+            element: page(ProctorLivePage),
           },
           {
             path: 'live',

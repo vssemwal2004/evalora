@@ -16,6 +16,9 @@ const baseVariables = [
   'examId',
   'proctorId',
   'password',
+  'loginEmail',
+  'loginPassword',
+  'assessmentPassword',
   'assignedStudents',
   'assignedBy',
   'reason',
@@ -75,9 +78,9 @@ const DEFAULT_EMAIL_TEMPLATES = [
     subject: '{{appName}} Exam Access - {{assessmentTitle}}',
     html: shell(
       'Your exam access is ready',
-      '<p>Hello <b>{{recipientName}}</b>,</p><p>Your exam access has been created for <b>{{assessmentTitle}}</b>.</p><table style="width:100%;border-collapse:collapse;margin:18px 0;">{{credentialRows}}</table><p>Use these credentials on the Evalora login page.</p>'
+      '<p>Hello <b>{{recipientName}}</b>,</p><p>Your exam access has been created for <b>{{assessmentTitle}}</b>.</p><table style="width:100%;border-collapse:collapse;margin:18px 0;">{{credentialRows}}</table><p>Sign in with your login email or Exam ID, then use the login password above.</p>'
     ),
-    text: 'Hello {{recipientName}},\n\nYour exam access has been created for {{assessmentTitle}}.\nAssessment Code: {{assessmentCode}}\nExam ID: {{examId}}\nPassword: {{password}}\nCourse: {{courseName}} {{courseId}}\nStart: {{startAt}}\nEnd: {{endAt}}\nDuration: {{durationMinutes}} minutes\n\nUse these credentials on the Evalora login page.\n\nRegards,\n{{appName}} Team',
+    text: 'Hello {{recipientName}},\n\nYour exam access has been created for {{assessmentTitle}}.\nAssessment Code: {{assessmentCode}}\nLogin Email: {{loginEmail}}\nExam ID: {{examId}}\nLogin Password: {{loginPassword}}\nCourse: {{courseName}} {{courseId}}\nStart: {{startAt}}\nEnd: {{endAt}}\nDuration: {{durationMinutes}} minutes\n\nSign in with your login email or Exam ID, then use the login password above.\n\nRegards,\n{{appName}} Team',
   },
   {
     key: 'proctor_credentials',
@@ -87,9 +90,9 @@ const DEFAULT_EMAIL_TEMPLATES = [
     subject: '{{appName}} Proctor Access - {{assessmentTitle}}',
     html: shell(
       'Proctor monitoring access',
-      '<p>Hello <b>{{recipientName}}</b>,</p><p>Your proctor access has been created for <b>{{assessmentTitle}}</b>.</p><table style="width:100%;border-collapse:collapse;margin:18px 0;">{{credentialRows}}</table><p>Use these credentials on the Evalora login page to monitor assigned students.</p>'
+      '<p>Hello <b>{{recipientName}}</b>,</p><p>Your proctor access has been created for <b>{{assessmentTitle}}</b>.</p><table style="width:100%;border-collapse:collapse;margin:18px 0;">{{credentialRows}}</table><p>Sign in with your email or Proctor ID, then enter the assessment password to monitor assigned students.</p>'
     ),
-    text: 'Hello {{recipientName}},\n\nYour proctor access has been created for {{assessmentTitle}}.\nAssessment Code: {{assessmentCode}}\nProctor ID: {{proctorId}}\nPassword: {{password}}\nAssigned Students: {{assignedStudents}}\nStart: {{startAt}}\nEnd: {{endAt}}\n\nRegards,\n{{appName}} Team',
+    text: 'Hello {{recipientName}},\n\nYour proctor access has been created for {{assessmentTitle}}.\nAssessment Code: {{assessmentCode}}\nLogin Email: {{recipientEmail}}\nProctor ID: {{proctorId}}\nLogin Password: {{loginPassword}}\nAssessment Password: {{assessmentPassword}}\nAssigned Students: {{assignedStudents}}\nStart: {{startAt}}\nEnd: {{endAt}}\n\nRegards,\n{{appName}} Team',
   },
   {
     key: 'staff_credentials',

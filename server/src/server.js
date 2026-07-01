@@ -17,6 +17,7 @@ async function bootstrap() {
   });
 
   registerSocketHandlers(io);
+  app.set('io', io);
 
   server.on('error', (error) => {
     if (error.code === 'EADDRINUSE') {

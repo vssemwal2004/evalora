@@ -1,5 +1,6 @@
 const express = require('express');
 const crypto = require('crypto');
+const AssessmentProctor = require('../models/AssessmentProctor');
 const AssessmentStudent = require('../models/AssessmentStudent');
 const User = require('../models/User');
 const { ROLES } = require('../constants/roles');
@@ -81,6 +82,43 @@ router.post('/login', async (req, res, next) => {
           ).select('+passwordHash');
           isValid = authenticatedUser.status === 'active';
         }
+      }
+    }
+
+    if (!isValid) {
+      const proctorAssignments = await AssessmentProctor.find({
+        $or: [
+          { email: normalizedIdentifier },
+          { generatedProctorId: String(identifier).trim().toUpperCase() },
+        ],
+      }).select('+passwordHash');
+
+      for (const assignment of proctorAssignments) {
+        const proctorUser = await User.findOne({ email: assignment.email, role: ROLES.PROCTOR }).select('+passwordHash');
+        const isUserCredentialValid = proctorUser?.status === 'active' && await proctorUser.comparePassword(password);
+        const isLegacyAssignmentCredentialValid = await User.schema.methods.comparePassword.call(assignment, password);
+
+        if (!isUserCredentialValid && !isLegacyAssignmentCredentialValid) {
+          continue;
+        }
+
+        authenticatedUser = await User.findOneAndUpdate(
+          { email: assignment.email, role: ROLES.PROCTOR },
+          {
+            $set: {
+              name: assignment.name,
+              email: assignment.email,
+              loginId: assignment.generatedProctorId,
+              uniqueUsername: assignment.generatedProctorId,
+              passwordHash: isUserCredentialValid ? proctorUser.passwordHash : assignment.passwordHash,
+              role: ROLES.PROCTOR,
+              status: 'active',
+            },
+          },
+          { new: true, upsert: true, setDefaultsOnInsert: true }
+        ).select('+passwordHash');
+        isValid = true;
+        break;
       }
     }
 

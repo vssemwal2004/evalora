@@ -27,13 +27,16 @@ function renderPreview(value) {
     examId: 'EVL-2026-A1B2C3',
     proctorId: 'PRC-2026-P9Q8R7',
     password: 'TcDXD9cyM4',
+    loginEmail: 'student@example.com',
+    loginPassword: 'TcDXD9cyM4',
+    assessmentPassword: 'GHogD2i4Yu',
     assignedStudents: '42',
     assignedBy: 'Evalora Super Admin',
     reason: 'Please correct two MCQ answers before approval.',
     staffRole: 'Faculty',
     courses: 'BTech (BTECH), BBA (1002)',
     credentialRows:
-      '<tr><td style="padding:8px 10px;border:1px solid #e2e8f0;background:#f8fafc;font-size:12px;font-weight:700;color:#64748b;">Exam ID</td><td style="padding:8px 10px;border:1px solid #e2e8f0;font-size:13px;font-weight:700;color:#0f172a;">EVL-2026-A1B2C3</td></tr><tr><td style="padding:8px 10px;border:1px solid #e2e8f0;background:#f8fafc;font-size:12px;font-weight:700;color:#64748b;">Password</td><td style="padding:8px 10px;border:1px solid #e2e8f0;font-size:13px;font-weight:700;color:#0f172a;">TcDXD9cyM4</td></tr>',
+      '<tr><td style="padding:8px 10px;border:1px solid #e2e8f0;background:#f8fafc;font-size:12px;font-weight:700;color:#64748b;">Login Email</td><td style="padding:8px 10px;border:1px solid #e2e8f0;font-size:13px;font-weight:700;color:#0f172a;">student@example.com</td></tr><tr><td style="padding:8px 10px;border:1px solid #e2e8f0;background:#f8fafc;font-size:12px;font-weight:700;color:#64748b;">Exam ID</td><td style="padding:8px 10px;border:1px solid #e2e8f0;font-size:13px;font-weight:700;color:#0f172a;">EVL-2026-A1B2C3</td></tr><tr><td style="padding:8px 10px;border:1px solid #e2e8f0;background:#f8fafc;font-size:12px;font-weight:700;color:#64748b;">Login Password</td><td style="padding:8px 10px;border:1px solid #e2e8f0;font-size:13px;font-weight:700;color:#0f172a;">TcDXD9cyM4</td></tr>',
   };
 
   return String(value || '').replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_match, key) => replacements[key] || '');

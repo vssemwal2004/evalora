@@ -178,6 +178,11 @@ function activitySummary(log) {
       detail: `${pluralCount(next.sent || 0, 'mail')} sent, ${pluralCount(next.skipped || 0, 'recipient')} skipped, ${pluralCount(next.failed || 0, 'failure')}.`,
       category: 'Mail',
     },
+    'assessment.proctor.delete': {
+      title: 'Deleted proctor',
+      detail: userName || compactList([next.generatedProctorId, previous.generatedProctorId]) || 'Proctor was removed from an assessment.',
+      category: 'Proctors',
+    },
     'email.template.update': {
       title: 'Updated email template',
       detail: compactList([next.name, next.subject, next.status && `status ${next.status}`]) || 'Email template content was updated.',

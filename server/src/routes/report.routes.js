@@ -54,6 +54,19 @@ function gradeAnswer(question, answer) {
   return { state: 'wrong', score: -negativeMarks };
 }
 
+function serializeUfmReview(event) {
+  const metadata = event.metadata || {};
+  return {
+    id: event._id,
+    status: metadata.reviewStatus || 'pending',
+    message: event.message || '',
+    proctorId: metadata.proctorId || null,
+    proctorName: metadata.proctorName || '',
+    proctorEmail: metadata.proctorEmail || '',
+    markedAt: event.occurredAt,
+  };
+}
+
 function summarizeAttempt({ assignment, attempt, answers, questions, securityEvents }) {
   const answerByQuestion = new Map(answers.map((answer) => [String(answer.questionId), answer]));
   const maxMarks = questions.reduce((total, question) => total + asNumber(question.positiveMarks, 1), 0);
@@ -98,10 +111,11 @@ function summarizeAttempt({ assignment, attempt, answers, questions, securityEve
     startedAt && submittedAt ? Math.max(Math.round((new Date(submittedAt) - new Date(startedAt)) / 60000), 0) : null;
   const warningEvents = securityEvents.filter((event) => event.severity === 'warning').length;
   const criticalEvents = securityEvents.filter((event) => event.severity === 'critical').length;
+  const ufmReviews = securityEvents.filter((event) => event.type === 'ufm_pending').map(serializeUfmReview);
   const securityScore = asNumber(attempt?.securityScore, securityEvents.reduce((total, event) => total + asNumber(event.score), 0));
   const percentage = maxMarks > 0 ? Number(((score / maxMarks) * 100).toFixed(2)) : 0;
   const status = attempt?.status || assignment.examStatus || 'not_started';
-  const integrityStatus = status === 'ufm' || criticalEvents > 0 || securityScore >= 10 ? 'flagged' : 'clean';
+  const integrityStatus = status === 'ufm' || ufmReviews.length > 0 || criticalEvents > 0 || securityScore >= 10 ? 'flagged' : 'clean';
 
   return {
     assignmentId: assignment._id,
@@ -133,6 +147,7 @@ function summarizeAttempt({ assignment, attempt, answers, questions, securityEve
     warningEvents,
     criticalEvents,
     totalSecurityEvents: securityEvents.length,
+    ufmReviews,
     integrityStatus,
     securitySummary: attempt?.securitySummary || {},
     questionBreakdown,
@@ -142,6 +157,9 @@ function summarizeAttempt({ assignment, attempt, answers, questions, securityEve
       severity: event.severity,
       score: event.score,
       message: event.message,
+      metadata: event.metadata || {},
+      proctorName: event.metadata?.proctorName || '',
+      proctorEmail: event.metadata?.proctorEmail || '',
       occurredAt: event.occurredAt,
     })),
   };
@@ -407,6 +425,9 @@ router.get('/assessments/:assessmentId/export', requirePermission('reports.expor
         'Security Score',
         'Warnings',
         'Critical Events',
+        'UFM Reviews',
+        'Latest UFM Proctor',
+        'Latest UFM Note',
         'Integrity',
       ],
       rows: serializeRows(report.rows).map((row) => ({
@@ -432,6 +453,9 @@ router.get('/assessments/:assessmentId/export', requirePermission('reports.expor
         securityScore: row.securityScore,
         warningEvents: row.warningEvents,
         criticalEvents: row.criticalEvents,
+        ufmReviews: row.ufmReviews?.length || 0,
+        latestUfmProctor: row.ufmReviews?.[0]?.proctorName || '',
+        latestUfmNote: row.ufmReviews?.[0]?.message || '',
         integrity: row.integrityStatus,
       })),
     });

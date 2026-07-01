@@ -80,12 +80,14 @@ function ensureAssignmentPasswordInEmail(email, password, label = 'Assignment Pa
 
 async function sendStudentCredentialMail({ assessment, student }) {
   const transport = getTransporter();
-  const email = await renderEmail('student_credentials', {
+  let email = await renderEmail('student_credentials', {
     recipientName: student.name,
     recipientEmail: student.email,
+    loginEmail: student.email,
     assessmentTitle: assessment.title,
     assessmentCode: assessment.assessmentCode,
     examId: student.generatedExamId,
+    loginPassword: student.passwordPreview,
     password: student.passwordPreview,
     courseName: student.courseName,
     courseId: student.courseId ? `(${student.courseId})` : '',
@@ -94,13 +96,15 @@ async function sendStudentCredentialMail({ assessment, student }) {
     durationMinutes: assessment.globalDurationMinutes || 0,
   }, [
     { label: 'Assessment Code', value: assessment.assessmentCode },
+    { label: 'Login Email', value: student.email },
     { label: 'Exam ID', value: student.generatedExamId },
-    { label: 'Password', value: student.passwordPreview },
+    { label: 'Login Password', value: student.passwordPreview },
     { label: 'Course', value: `${student.courseName}${student.courseId ? ` (${student.courseId})` : ''}` },
     { label: 'Start', value: formatDateTime(assessment.startAt) },
     { label: 'End', value: formatDateTime(assessment.endAt) },
     { label: 'Duration', value: `${assessment.globalDurationMinutes || 0} minutes` },
   ]);
+  email = ensureAssignmentPasswordInEmail(email, student.passwordPreview, 'Login Password');
 
   await transport.sendMail({
     from: env.smtp.from,
@@ -111,26 +115,34 @@ async function sendStudentCredentialMail({ assessment, student }) {
   });
 }
 
-async function sendProctorCredentialMail({ assessment, proctor }) {
+async function sendProctorCredentialMail({ assessment, proctor, loginPassword }) {
   const transport = getTransporter();
-  const email = await renderEmail('proctor_credentials', {
+  const assessmentPassword = proctor.passwordPreview;
+  const safeLoginPassword = loginPassword || proctor.loginPassword || proctor.passwordPreview;
+  let email = await renderEmail('proctor_credentials', {
     recipientName: proctor.name,
     recipientEmail: proctor.email,
     assessmentTitle: assessment.title,
     assessmentCode: assessment.assessmentCode,
     proctorId: proctor.generatedProctorId,
-    password: proctor.passwordPreview,
+    password: safeLoginPassword,
+    loginPassword: safeLoginPassword,
+    assessmentPassword,
     assignedStudents: proctor.assignedStudentCount || 0,
     startAt: formatDateTime(assessment.startAt),
     endAt: formatDateTime(assessment.endAt),
   }, [
     { label: 'Assessment Code', value: assessment.assessmentCode },
+    { label: 'Login Email', value: proctor.email },
     { label: 'Proctor ID', value: proctor.generatedProctorId },
-    { label: 'Password', value: proctor.passwordPreview },
+    { label: 'Login Password', value: safeLoginPassword },
+    { label: 'Assessment Password', value: assessmentPassword },
     { label: 'Assigned Students', value: proctor.assignedStudentCount || 0 },
     { label: 'Start', value: formatDateTime(assessment.startAt) },
     { label: 'End', value: formatDateTime(assessment.endAt) },
   ]);
+  email = ensureAssignmentPasswordInEmail(email, safeLoginPassword, 'Login Password');
+  email = ensureAssignmentPasswordInEmail(email, assessmentPassword, 'Assessment Password');
 
   await transport.sendMail({
     from: env.smtp.from,

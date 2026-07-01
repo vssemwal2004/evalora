@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { Copy, KeyRound, Mail, MoreHorizontal, Plus, RefreshCw, ShieldCheck, UserRoundCheck } from 'lucide-react';
+import { Copy, Eye, EyeOff, KeyRound, Mail, MoreHorizontal, Plus, RefreshCw, ShieldCheck, Trash2, UserRoundCheck, X } from 'lucide-react';
 import { api } from '../../lib/api';
 import { EmptyState, MetricCard, PageHeader, SectionPanel } from '../../ui/Surface.jsx';
 
@@ -13,6 +13,63 @@ const initialForm = {
 
 function statusClass(status) {
   return `status-badge status-${String(status || '').replace(/\s+/g, '_')}`;
+}
+
+function CredentialValue({ value, visible, onToggle }) {
+  if (!value) return <span className="text-slate-400">-</span>;
+
+  return (
+    <span className="inline-flex max-w-44 items-center overflow-hidden rounded-md border border-slate-200 bg-slate-50">
+      <span className="min-w-0 flex-1 truncate px-2 py-1 font-mono text-xs font-semibold text-slate-800">
+        {visible ? value : '************'}
+      </span>
+      <button
+        className="grid h-7 w-7 place-items-center border-l border-slate-200 text-slate-500 hover:bg-white hover:text-brand-600"
+        type="button"
+        onClick={onToggle}
+        aria-label={visible ? 'Hide password' : 'Show password'}
+      >
+        {visible ? <EyeOff size={14} /> : <Eye size={14} />}
+      </button>
+    </span>
+  );
+}
+
+function DeleteProctorModal({ proctor, isDeleting, onCancel, onConfirm }) {
+  if (!proctor) return null;
+
+  return (
+    <div className="fixed inset-0 z-[70] grid place-items-center bg-slate-950/40 p-4">
+      <div className="w-full max-w-md overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl">
+        <div className="flex items-start justify-between gap-3 border-b border-slate-200 bg-red-50 px-4 py-3">
+          <div>
+            <p className="text-xs font-bold uppercase text-red-600">Delete proctor</p>
+            <h2 className="mt-1 text-base font-semibold text-slate-950">{proctor.name}</h2>
+            <p className="mt-1 text-xs text-slate-600">{proctor.email}</p>
+          </div>
+          <button className="secondary-button h-8 w-8 p-0" type="button" onClick={onCancel} disabled={isDeleting} aria-label="Close">
+            <X size={15} />
+          </button>
+        </div>
+        <div className="space-y-3 p-4 text-sm text-slate-700">
+          <p>This will remove the proctor from this assessment and clear their assigned student mapping.</p>
+          <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs">
+            <p><span className="font-semibold text-slate-900">Proctor ID:</span> {proctor.generatedProctorId}</p>
+            <p className="mt-1"><span className="font-semibold text-slate-900">Assigned students:</span> {proctor.assignedStudentCount || 0}</p>
+          </div>
+        </div>
+        <div className="flex justify-end gap-2 border-t border-slate-200 bg-slate-50 px-4 py-3">
+          <button className="secondary-button" type="button" onClick={onCancel} disabled={isDeleting}>
+            Cancel
+          </button>
+          <button className="primary-button bg-red-600 hover:bg-red-700 focus:ring-red-100" type="button" onClick={onConfirm} disabled={isDeleting}>
+            <Trash2 size={16} />
+            {isDeleting ? 'Deleting...' : 'Delete'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 export function AssessmentProctorsPage({ assessmentId: assessmentIdProp, embedded = false } = {}) {
@@ -31,6 +88,9 @@ export function AssessmentProctorsPage({ assessmentId: assessmentIdProp, embedde
   const [sendingMailId, setSendingMailId] = useState('');
   const [openActionMenu, setOpenActionMenu] = useState('');
   const [actionMenuPosition, setActionMenuPosition] = useState({ top: 0, left: 0 });
+  const [visibleCredentials, setVisibleCredentials] = useState({});
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [deletingId, setDeletingId] = useState('');
   const [error, setError] = useState('');
   const [activeView, setActiveView] = useState(embedded ? 'add' : 'directory');
 
@@ -80,8 +140,8 @@ export function AssessmentProctorsPage({ assessmentId: assessmentIdProp, embedde
 
   function toggleActionMenu(event, proctorId) {
     const rect = event.currentTarget.getBoundingClientRect();
-    const menuWidth = 176;
-    const menuHeight = 132;
+    const menuWidth = 216;
+    const menuHeight = 240;
     const gap = 8;
     const hasRoomBelow = window.innerHeight - rect.bottom >= menuHeight + gap;
     const top = hasRoomBelow ? rect.bottom + gap : Math.max(gap, rect.top - menuHeight - gap);
@@ -89,6 +149,10 @@ export function AssessmentProctorsPage({ assessmentId: assessmentIdProp, embedde
 
     setActionMenuPosition({ top, left });
     setOpenActionMenu((current) => (current === proctorId ? '' : proctorId));
+  }
+
+  function toggleCredential(key) {
+    setVisibleCredentials((current) => ({ ...current, [key]: !current[key] }));
   }
 
   async function handleSubmit(event) {
@@ -154,6 +218,22 @@ export function AssessmentProctorsPage({ assessmentId: assessmentIdProp, embedde
     }
   }
 
+  async function deleteProctor() {
+    if (!deleteTarget) return;
+
+    setDeletingId(deleteTarget._id);
+    setError('');
+    try {
+      await api.delete(`/assessments/${assessmentId}/proctors/${deleteTarget._id}`);
+      setDeleteTarget(null);
+      await Promise.all([loadProctors(), loadAssessment()]);
+    } catch (requestError) {
+      setError(requestError.response?.data?.message || 'Unable to delete proctor.');
+    } finally {
+      setDeletingId('');
+    }
+  }
+
   async function copyText(value, label) {
     if (!value) return;
     try {
@@ -188,7 +268,10 @@ export function AssessmentProctorsPage({ assessmentId: assessmentIdProp, embedde
               Proctor ID: <span className="font-semibold">{createdCredential.generatedProctorId}</span>
             </p>
             <p>
-              Password: <span className="font-semibold">{createdCredential.passwordPreview}</span>
+              Login password: <span className="font-semibold">{createdCredential.loginPasswordPreview || '-'}</span>
+            </p>
+            <p>
+              Assessment password: <span className="font-semibold">{createdCredential.passwordPreview}</span>
             </p>
             <p>
               Email: <span className="font-semibold">{createdCredential.email}</span>
@@ -326,7 +409,8 @@ export function AssessmentProctorsPage({ assessmentId: assessmentIdProp, embedde
                 <tr>
                   <th>Proctor</th>
                   <th>Proctor ID</th>
-                  <th>Password</th>
+                  <th>Login Password</th>
+                  <th>Assessment Password</th>
                   <th>Assigned Students</th>
                   <th>Mail</th>
                   <th>Status</th>
@@ -336,13 +420,13 @@ export function AssessmentProctorsPage({ assessmentId: assessmentIdProp, embedde
               <tbody className="divide-y divide-slate-200">
                 {isLoading ? (
                   <tr>
-                    <td className="px-4 py-6 text-center text-slate-500" colSpan={7}>
+                    <td className="px-4 py-6 text-center text-slate-500" colSpan={8}>
                       Loading proctors...
                     </td>
                   </tr>
                 ) : proctors.length === 0 ? (
                   <tr>
-                    <td colSpan={7}>
+                    <td colSpan={8}>
                       <EmptyState title="No proctors added yet" description="Add proctors, then calculate capacity and auto-assign students." />
                     </td>
                   </tr>
@@ -354,7 +438,20 @@ export function AssessmentProctorsPage({ assessmentId: assessmentIdProp, embedde
                         <p className="text-xs text-slate-500">{proctor.email}</p>
                       </td>
                       <td className="font-semibold text-slate-800">{proctor.generatedProctorId}</td>
-                      <td className="font-semibold text-slate-800">{proctor.passwordPreview || '-'}</td>
+                      <td>
+                        <CredentialValue
+                          value={proctor.loginPasswordPreview}
+                          visible={Boolean(visibleCredentials[`${proctor._id}:login`])}
+                          onToggle={() => toggleCredential(`${proctor._id}:login`)}
+                        />
+                      </td>
+                      <td>
+                        <CredentialValue
+                          value={proctor.passwordPreview}
+                          visible={Boolean(visibleCredentials[`${proctor._id}:assessment`])}
+                          onToggle={() => toggleCredential(`${proctor._id}:assessment`)}
+                        />
+                      </td>
                       <td className="text-slate-700">{proctor.assignedStudentCount || 0}</td>
                       <td><span className={statusClass(proctor.mailStatus)}>{proctor.mailStatus.replace('_', ' ')}</span></td>
                       <td><span className={statusClass(proctor.activeStatus)}>{proctor.activeStatus}</span></td>
@@ -369,7 +466,7 @@ export function AssessmentProctorsPage({ assessmentId: assessmentIdProp, embedde
                         </button>
                         {openActionMenu === proctor._id ? (
                           <div
-                            className="fixed z-50 w-44 rounded-md border border-slate-200 bg-white py-1 text-left shadow-xl"
+                            className="fixed z-50 w-56 rounded-md border border-slate-200 bg-white py-1 text-left shadow-xl"
                             style={{ top: actionMenuPosition.top, left: actionMenuPosition.left }}
                           >
                             <button
@@ -392,11 +489,31 @@ export function AssessmentProctorsPage({ assessmentId: assessmentIdProp, embedde
                             <button
                               className="flex w-full items-center gap-2 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
                               type="button"
-                              onClick={() => copyText(proctor.passwordPreview, 'password')}
+                              onClick={() => copyText(proctor.loginPasswordPreview, 'login password')}
+                              disabled={!proctor.loginPasswordPreview}
+                            >
+                              <KeyRound size={14} className="text-brand-500" />
+                              Copy login password
+                            </button>
+                            <button
+                              className="flex w-full items-center gap-2 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                              type="button"
+                              onClick={() => copyText(proctor.passwordPreview, 'assessment password')}
                               disabled={!proctor.passwordPreview}
                             >
                               <KeyRound size={14} className="text-brand-500" />
-                              Copy password
+                              Copy assessment password
+                            </button>
+                            <button
+                              className="flex w-full items-center gap-2 border-t border-slate-100 px-3 py-2 text-xs font-semibold text-red-700 hover:bg-red-50"
+                              type="button"
+                              onClick={() => {
+                                setDeleteTarget(proctor);
+                                setOpenActionMenu('');
+                              }}
+                            >
+                              <Trash2 size={14} />
+                              Delete proctor
                             </button>
                           </div>
                         ) : null}
@@ -410,6 +527,13 @@ export function AssessmentProctorsPage({ assessmentId: assessmentIdProp, embedde
           </SectionPanel>
         ) : null}
       </div>
+
+      <DeleteProctorModal
+        proctor={deleteTarget}
+        isDeleting={deletingId === deleteTarget?._id}
+        onCancel={() => setDeleteTarget(null)}
+        onConfirm={deleteProctor}
+      />
     </section>
   );
 }

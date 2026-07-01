@@ -20,6 +20,7 @@ import {
   UserRoundCheck,
   Users,
   Video,
+  Settings,
   X,
 } from 'lucide-react';
 import { api } from '../../lib/api';
@@ -104,6 +105,12 @@ function getProctorPath(pathname, assessmentId) {
   return pathname.startsWith('/super-admin')
     ? `/super-admin/assessments/${assessmentId}/proctors`
     : `/admin/assessments/${assessmentId}/proctors`;
+}
+
+function getSettingsPath(pathname, assessmentId) {
+  return pathname.startsWith('/super-admin')
+    ? `/super-admin/assessments/${assessmentId}/settings`
+    : `/admin/assessments/${assessmentId}/settings`;
 }
 
 function getWorkspacePath(pathname, assessmentId) {
@@ -964,6 +971,14 @@ export function AssessmentOverviewPage({ mode = 'overview' }) {
                               >
                                 <UserRoundCheck size={14} className="text-brand-500" />
                                 Proctors
+                              </Link>
+                              <Link
+                                className="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                                to={getSettingsPath(location.pathname, assessment._id)}
+                                onClick={() => setOpenMenuId('')}
+                              >
+                                <Settings size={14} className="text-brand-500" />
+                                Settings
                               </Link>
                               </div>
 

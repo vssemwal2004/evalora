@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { CheckCircle2, Edit3, EyeOff, ListFilter, MoreHorizontal, Power, Search, Trash2, Users, X } from 'lucide-react';
+import { CheckCircle2, Edit3, EyeOff, ListFilter, Mail, MoreHorizontal, Power, Search, Trash2, Users, X } from 'lucide-react';
 import { api } from '../../lib/api';
 import { EmptyState, SectionPanel } from '../../ui/Surface.jsx';
 import { useAuth } from '../auth/AuthContext.jsx';
@@ -31,14 +31,17 @@ export function StudentDirectoryPage() {
   const [actionMenuPosition, setActionMenuPosition] = useState({ top: 0, left: 0 });
   const [editStudent, setEditStudent] = useState(null);
   const [deleteStudent, setDeleteStudent] = useState(null);
+  const [sendingMailId, setSendingMailId] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
 
   const selectedItems = useMemo(() => items.filter((item) => selectedIds.includes(item._id)), [items, selectedIds]);
   const allVisibleSelected = items.length > 0 && items.every((item) => selectedIds.includes(item._id));
   const canEdit = canUse(user, 'student.edit');
   const canDelete = canUse(user, 'student.remove');
+  const canMail = canUse(user, 'mail.send');
 
   const loadStudents = useCallback(async () => {
     setIsLoading(true);
@@ -94,7 +97,7 @@ export function StudentDirectoryPage() {
   function toggleActionMenu(event, studentId) {
     const rect = event.currentTarget.getBoundingClientRect();
     const menuWidth = 192;
-    const menuHeight = 132;
+    const menuHeight = 176;
     const gap = 8;
     const hasRoomBelow = window.innerHeight - rect.bottom >= menuHeight + gap;
     const top = hasRoomBelow ? rect.bottom + gap : Math.max(gap, rect.top - menuHeight - gap);
@@ -108,6 +111,7 @@ export function StudentDirectoryPage() {
     if (!canEdit) return;
     setIsSaving(true);
     setError('');
+    setNotice('');
     setOpenMenuId('');
 
     try {
@@ -125,6 +129,7 @@ export function StudentDirectoryPage() {
     if (!editStudent || !canEdit) return;
     setIsSaving(true);
     setError('');
+    setNotice('');
 
     try {
       await api.patch(`/students/${editStudent._id}`, {
@@ -145,6 +150,7 @@ export function StudentDirectoryPage() {
     if (!deleteStudent || !canDelete) return;
     setIsSaving(true);
     setError('');
+    setNotice('');
 
     try {
       await api.delete(`/students/${deleteStudent._id}`);
@@ -163,6 +169,7 @@ export function StudentDirectoryPage() {
     if (action !== 'delete' && !canEdit) return;
     setIsSaving(true);
     setError('');
+    setNotice('');
     setOpenMenuId('');
 
     try {
@@ -173,6 +180,25 @@ export function StudentDirectoryPage() {
       setError(requestError.response?.data?.message || 'Unable to update selected students.');
     } finally {
       setIsSaving(false);
+    }
+  }
+
+  async function sendStudentMail(student) {
+    if (!canMail || !student?._id) return;
+    setSendingMailId(student._id);
+    setError('');
+    setNotice('');
+    setOpenMenuId('');
+
+    try {
+      const response = await api.post(`/students/${student._id}/send-mail`);
+      setNotice(response.data.message || 'Student credential mail sent successfully.');
+      await loadStudents();
+    } catch (requestError) {
+      await loadStudents();
+      setError(requestError.response?.data?.message || 'Unable to send student credential mail.');
+    } finally {
+      setSendingMailId('');
     }
   }
 
@@ -191,6 +217,7 @@ export function StudentDirectoryPage() {
       </div>
 
       {error ? <div className="border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">{error}</div> : null}
+      {notice ? <div className="border border-green-200 bg-green-50 px-4 py-3 text-sm font-semibold text-green-700">{notice}</div> : null}
 
       <div className="grid overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm sm:grid-cols-2 xl:grid-cols-4">
         {[
@@ -333,6 +360,15 @@ export function StudentDirectoryPage() {
                           className="fixed z-50 w-48 rounded-lg border border-slate-200 bg-white p-1 text-left shadow-xl"
                           style={{ top: actionMenuPosition.top, left: actionMenuPosition.left }}
                         >
+                          <button
+                            className="flex w-full items-center gap-2 rounded px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-400"
+                            type="button"
+                            disabled={!canMail || sendingMailId === student._id}
+                            onClick={() => sendStudentMail(student)}
+                          >
+                            <Mail size={14} className="text-brand-500" />
+                            {sendingMailId === student._id ? 'Sending mail...' : ['sent', 'resent'].includes(student.mailStatus) ? 'Resend mail' : 'Send mail'}
+                          </button>
                           <button className="flex w-full items-center gap-2 rounded px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50" type="button" disabled={!canEdit} onClick={() => { setEditStudent(student); setOpenMenuId(''); }}>
                             <Edit3 size={14} className="text-brand-500" />
                             Edit student

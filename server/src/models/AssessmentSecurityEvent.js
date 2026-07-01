@@ -50,6 +50,7 @@ const assessmentSecurityEventSchema = new mongoose.Schema(
         'duplicate_tab',
         'idle_detected',
         'noise_detected',
+        'ufm_pending',
         'heartbeat',
       ],
       required: true,

@@ -9,7 +9,18 @@ const settingGroups = [
   {
     title: 'Access and Proctoring',
     icon: Lock,
-    keys: ['proctoringEnabled', 'chatEnabled', 'warningMessagesEnabled', 'ufmActionEnabled'],
+    keys: [
+      'proctoringEnabled',
+      'chatEnabled',
+      'proctorGlobalChatEnabled',
+      'warningMessagesEnabled',
+      'ufmActionEnabled',
+      'screenMonitoringEnabled',
+      'proctorAlertPopupEnabled',
+      'maxStudentsPerProctor',
+      'liveStatusPollingSeconds',
+      'suspiciousActivityThresholdPerMinute',
+    ],
   },
   {
     title: 'Browser Security',

@@ -30,6 +30,51 @@ async function syncAssessmentProctorCount(assessmentId) {
   await assessment.save();
 }
 
+async function ensureProctorLoginUser(proctor) {
+  let user = await User.findOne({ email: proctor.email, role: ROLES.PROCTOR }).select('+passwordHash +passwordPreview');
+  let loginPassword = user?.passwordPreview;
+
+  if (!loginPassword) {
+    loginPassword = generatePassword(12);
+  }
+
+  const passwordHash = user?.passwordPreview ? user.passwordHash : await User.hashPassword(loginPassword);
+
+  user = await User.findOneAndUpdate(
+    { email: proctor.email, role: ROLES.PROCTOR },
+    {
+      $set: {
+        name: proctor.name,
+        email: proctor.email,
+        loginId: proctor.generatedProctorId,
+        uniqueUsername: proctor.generatedProctorId,
+        passwordHash,
+        passwordPreview: loginPassword,
+        role: ROLES.PROCTOR,
+        status: 'active',
+        mustChangePassword: true,
+      },
+    },
+    { new: true, upsert: true, setDefaultsOnInsert: true }
+  ).select('+passwordPreview');
+
+  return user.passwordPreview;
+}
+
+async function withLoginPasswordPreviews(proctors) {
+  const items = [];
+
+  for (const proctor of proctors) {
+    const loginPasswordPreview = await ensureProctorLoginUser(proctor);
+    items.push({
+      ...proctor.toObject(),
+      loginPasswordPreview,
+    });
+  }
+
+  return items;
+}
+
 function createDistributionPlan(totalStudents, totalProctors, capacity) {
   const safeCapacity = Math.max(Number(capacity || 50), 1);
   const requiredProctors = Math.ceil(totalStudents / safeCapacity);
@@ -70,7 +115,7 @@ router.get('/', requirePermission('assessment.view'), async (req, res, next) => 
     );
 
     return res.json({
-      items,
+      items: await withLoginPasswordPreviews(items),
       summary: {
         totalEligibleStudents,
         assignedStudents: assignedStudentIds.size,
@@ -129,6 +174,7 @@ router.post('/', requirePermission('proctor.add'), async (req, res, next) => {
       passwordPreview: plainPassword,
       addedBy: req.user._id,
     });
+    const loginPasswordPreview = await ensureProctorLoginUser(assignment);
 
     await syncAssessmentProctorCount(assessment._id);
 
@@ -147,6 +193,7 @@ router.post('/', requirePermission('proctor.add'), async (req, res, next) => {
       proctor: {
         ...assignment.toObject(),
         passwordPreview: plainPassword,
+        loginPasswordPreview,
       },
     });
   } catch (error) {
@@ -286,7 +333,8 @@ router.post('/send-mail', requirePermission('mail.send'), async (req, res, next)
       }
 
       try {
-        await sendProctorCredentialMail({ assessment, proctor });
+        const loginPassword = await ensureProctorLoginUser(proctor);
+        await sendProctorCredentialMail({ assessment, proctor, loginPassword });
         proctor.mailStatus = 'sent';
         await proctor.save();
         sent += 1;
@@ -337,7 +385,8 @@ router.post('/:proctorId/send-mail', requirePermission('mail.send'), async (req,
       return res.status(404).json({ message: 'Proctor not found in this assessment.' });
     }
 
-    await sendProctorCredentialMail({ assessment, proctor });
+    const loginPassword = await ensureProctorLoginUser(proctor);
+    await sendProctorCredentialMail({ assessment, proctor, loginPassword });
 
     proctor.mailStatus = ['sent', 'resent'].includes(proctor.mailStatus) ? 'resent' : 'sent';
     await proctor.save();
@@ -371,6 +420,48 @@ router.post('/:proctorId/send-mail', requirePermission('mail.send'), async (req,
       await proctor.save().catch(() => null);
     }
 
+    return next(error);
+  }
+});
+
+router.delete('/:proctorId', requirePermission('proctor.remove'), async (req, res, next) => {
+  try {
+    const assessment = await findScopedAssessment(req);
+    if (!assessment) {
+      return res.status(404).json({ message: 'Assessment not found.' });
+    }
+
+    const proctor = await AssessmentProctor.findOne({
+      _id: req.params.proctorId,
+      assessmentId: assessment._id,
+    }).select('+passwordPreview');
+
+    if (!proctor) {
+      return res.status(404).json({ message: 'Proctor not found in this assessment.' });
+    }
+
+    await AssessmentStudent.updateMany(
+      { assessmentId: assessment._id, assignedProctorId: proctor._id },
+      { $unset: { assignedProctorId: '' } }
+    );
+    await AssessmentProctor.deleteOne({ _id: proctor._id });
+    await syncAssessmentProctorCount(assessment._id);
+
+    await writeAuditLog(req, {
+      action: 'assessment.proctor.delete',
+      targetType: 'AssessmentProctor',
+      targetId: proctor._id,
+      oldValue: {
+        assessmentId: assessment._id,
+        name: proctor.name,
+        email: proctor.email,
+        generatedProctorId: proctor.generatedProctorId,
+        assignedStudentCount: proctor.assignedStudentCount,
+      },
+    });
+
+    return res.json({ message: 'Proctor removed from this assessment.', id: proctor._id });
+  } catch (error) {
     return next(error);
   }
 });
