@@ -414,15 +414,20 @@ function FocusedMonitorPage({
   isMarkingUfm,
 }) {
   const [ufmReason, setUfmReason] = useState('');
+  const [chatOpen, setChatOpen] = useState(false);
+  const [screenSize, setScreenSize] = useState('medium');
 
   if (!student) return null;
 
+  const frameHeightClass = screenSize === 'compact' ? 'min-h-[300px]' : screenSize === 'large' ? 'min-h-[560px]' : 'min-h-[430px]';
+  const alertCount = alerts.length;
+
   return (
-    <section className="min-h-[calc(100vh-96px)] space-y-3">
+    <section className="relative min-h-[calc(100vh-96px)] space-y-3 pb-20">
       <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-4 py-2.5">
           <div className="flex min-w-0 items-center gap-3">
-            <button className="secondary-button h-10 px-3" type="button" onClick={onBack} aria-label="Back to student grid">
+            <button className="secondary-button h-9 px-3 text-sm" type="button" onClick={onBack} aria-label="Back to student grid">
               <ArrowLeft size={16} className="text-brand-500" />
               Back
             </button>
@@ -433,34 +438,34 @@ function FocusedMonitorPage({
                   {student.examId}
                 </span>
               </div>
-              <h1 className="mt-1 truncate text-xl font-semibold text-slate-950">{student.name}</h1>
-              <p className="mt-1 truncate text-xs font-semibold text-slate-500">
+              <h1 className="mt-1 truncate text-lg font-semibold text-slate-950">{student.name}</h1>
+              <p className="truncate text-xs font-semibold text-slate-500">
                 {assignment.title} / {student.courseName}{student.courseId ? ` (${student.courseId})` : ''}
               </p>
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             {liveStatus === 'idle' ? (
-              <button className="primary-button" type="button" onClick={() => onStartLive(student)}>
+              <button className="primary-button h-9 px-3 text-sm" type="button" onClick={() => onStartLive(student)}>
                 <Video size={16} />
                 Open live
               </button>
             ) : (
-              <button className="secondary-button" type="button" onClick={onStopLive}>
+              <button className="secondary-button h-9 px-3 text-sm" type="button" onClick={onStopLive}>
                 Stop live
               </button>
             )}
           </div>
         </div>
 
-        <div className="grid gap-2 p-3 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="grid gap-2 p-2.5 sm:grid-cols-2 xl:grid-cols-4">
           {[
             ['Security', student.securityScore || 0, Number(student.securityScore || 0) > 0 ? 'text-amber-700' : 'text-slate-800'],
             ['Alerts', student.alertCount || 0, Number(student.alertCount || 0) > 0 ? 'text-amber-700' : 'text-slate-800'],
             ['Heartbeat', formatDateTime(student.lastHeartbeatAt), 'text-slate-800'],
             ['Mail', String(student.mailStatus || 'not sent').replace(/_/g, ' '), 'text-slate-800'],
           ].map(([label, value, tone]) => (
-            <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2" key={label}>
+            <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5" key={label}>
               <p className="text-[10px] font-bold uppercase text-slate-400">{label}</p>
               <p className={`mt-1 truncate text-sm font-semibold ${tone}`}>{value}</p>
             </div>
@@ -468,20 +473,41 @@ function FocusedMonitorPage({
         </div>
       </div>
 
-      <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_360px]">
+      <div className="grid items-start gap-3 xl:grid-cols-[minmax(0,1fr)_320px]">
         <div className="overflow-hidden rounded-xl border border-slate-200 bg-slate-950 shadow-sm">
-          <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 px-4 py-2.5">
             <div>
               <p className="text-[10px] font-bold uppercase text-slate-400">Live camera</p>
               <p className="text-sm font-semibold text-white">
                 {liveStatus === 'connected' ? 'Connected' : liveStatus === 'requesting' ? 'Waiting for student browser' : liveStatus === 'connecting' ? 'Connecting' : 'No stream open'}
               </p>
             </div>
-            <span className={`rounded-full px-3 py-1 text-xs font-bold ${liveStatus === 'connected' ? 'bg-green-500/15 text-green-200' : 'bg-amber-500/15 text-amber-100'}`}>
-              {liveStatus}
-            </span>
+            <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1 rounded-lg border border-white/10 bg-white/5 p-1">
+                {[
+                  ['compact', 'S'],
+                  ['medium', 'M'],
+                  ['large', 'L'],
+                ].map(([value, label]) => (
+                  <button
+                    key={value}
+                    className={`h-7 min-w-7 rounded-md px-2 text-xs font-bold transition ${
+                      screenSize === value ? 'bg-white text-slate-950' : 'text-slate-300 hover:bg-white/10'
+                    }`}
+                    type="button"
+                    title={`${value} screen`}
+                    onClick={() => setScreenSize(value)}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <span className={`rounded-full px-3 py-1 text-xs font-bold ${liveStatus === 'connected' ? 'bg-green-500/15 text-green-200' : 'bg-amber-500/15 text-amber-100'}`}>
+                {liveStatus}
+              </span>
+            </div>
           </div>
-          <div className="relative aspect-video min-h-[420px] bg-slate-900">
+          <div className={`relative aspect-video ${frameHeightClass} bg-slate-900 transition-all duration-200`}>
             <video ref={remoteVideoRef} className="h-full w-full object-contain" autoPlay playsInline />
             {liveStatus !== 'connected' ? (
               <div className="absolute inset-0 grid place-items-center text-center">
@@ -494,33 +520,120 @@ function FocusedMonitorPage({
           </div>
         </div>
 
-        <aside className="space-y-3">
-          <div className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
-            <p className="text-xs font-bold uppercase text-slate-400">Student overview</p>
-            <div className="mt-3 grid grid-cols-2 gap-2">
-              {[
-                ['Email', student.email],
-                ['Course', student.courseId || '-'],
-                ['Status', String(student.examStatus || 'not_started').replace(/_/g, ' ')],
-                ['Attempt', String(student.attemptStatus || 'not_started').replace(/_/g, ' ')],
-              ].map(([label, value]) => (
-                <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2" key={label}>
-                  <p className="text-[10px] font-bold uppercase text-slate-400">{label}</p>
-                  <p className="mt-1 truncate text-xs font-semibold text-slate-900">{value || '-'}</p>
-                </div>
-              ))}
+        <aside className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm xl:sticky xl:top-3 xl:max-h-[calc(100vh-7rem)]">
+          <div className="flex items-center justify-between border-b border-slate-200 bg-slate-50 px-3 py-2.5">
+            <div>
+              <p className="text-xs font-bold uppercase text-slate-500">Student tools</p>
+              <p className="text-[11px] font-semibold text-slate-400">Identity, risk, and actions</p>
             </div>
+            <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${alertCount ? 'bg-red-50 text-red-600 ring-1 ring-red-100' : 'bg-slate-100 text-slate-500'}`}>
+              {alertCount} alerts
+            </span>
           </div>
 
-          {settings.chatEnabled ? (
-            <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-              <div className="border-b border-slate-200 bg-slate-50 px-4 py-3">
-                <p className="text-sm font-semibold text-slate-950">Chat</p>
-                <p className="mt-0.5 text-xs font-semibold text-slate-500">Temporary messages for this active assessment only.</p>
+          <div className="max-h-[calc(100vh-11rem)] space-y-3 overflow-y-auto p-3">
+            <section>
+              <p className="text-[10px] font-bold uppercase text-slate-400">Student overview</p>
+              <div className="mt-2 grid grid-cols-2 gap-2">
+                {[
+                  ['Email', student.email],
+                  ['Course', student.courseId || '-'],
+                  ['Status', String(student.examStatus || 'not_started').replace(/_/g, ' ')],
+                  ['Attempt', String(student.attemptStatus || 'not_started').replace(/_/g, ' ')],
+                ].map(([label, value]) => (
+                  <div className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-2" key={label}>
+                    <p className="text-[10px] font-bold uppercase text-slate-400">{label}</p>
+                    <p className="mt-1 truncate text-xs font-semibold text-slate-900" title={value || '-'}>
+                      {value || '-'}
+                    </p>
+                  </div>
+                ))}
               </div>
-              <div className="max-h-64 space-y-2 overflow-y-auto p-3">
+            </section>
+
+            {settings.ufmActionEnabled ? (
+              <section className="rounded-lg border border-amber-200 bg-amber-50 p-3">
+                <div className="flex items-center justify-between gap-2">
+                  <label className="text-[10px] font-bold uppercase text-amber-700">UFM note</label>
+                  <span className="text-[10px] font-bold uppercase text-amber-600">Admin review</span>
+                </div>
+                <textarea
+                  className="field-input mt-2 min-h-16 bg-white text-xs"
+                  value={ufmReason}
+                  onChange={(event) => setUfmReason(event.target.value)}
+                  placeholder="Short reason visible in report"
+                />
+                <button
+                  className="mt-2 inline-flex h-8 w-full items-center justify-center gap-2 rounded-md bg-amber-600 px-3 text-xs font-semibold text-white transition hover:bg-amber-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                  type="button"
+                  disabled={isMarkingUfm || !ufmReason.trim()}
+                  onClick={async () => {
+                    const ok = await onMarkUfm(student, ufmReason);
+                    if (ok) setUfmReason('');
+                  }}
+                >
+                  <ShieldAlert size={13} />
+                  {isMarkingUfm ? 'Marking...' : 'Mark UFM pending'}
+                </button>
+              </section>
+            ) : null}
+
+            <section>
+              <div className="mb-2 flex items-center justify-between">
+                <p className="text-[10px] font-bold uppercase text-slate-400">Recent alerts</p>
+                <span className="text-[10px] font-bold text-slate-400">{alertCount}</span>
+              </div>
+              <div className="max-h-[360px] space-y-2 overflow-y-auto pr-1">
+                {alerts.length === 0 ? (
+                  <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 text-xs font-semibold text-slate-400">
+                    No alerts for this student.
+                  </div>
+                ) : alerts.map((alert) => (
+                  <div key={alert.id || `${alert.type}-${alert.occurredAt}`} className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="truncate text-xs font-bold text-slate-800">{String(alert.type || 'activity').replace(/_/g, ' ')}</p>
+                      <span className={`shrink-0 text-[10px] font-bold uppercase ${alert.severity === 'critical' ? 'text-red-600' : 'text-amber-600'}`}>{alert.severity || 'info'}</span>
+                    </div>
+                    <p className="mt-1 line-clamp-2 text-xs font-semibold text-slate-500">{alert.message || 'Activity detected'}</p>
+                    <p className="mt-1 text-[10px] font-semibold text-slate-400">{formatDateTime(alert.occurredAt)}</p>
+                  </div>
+                ))}
+              </div>
+            </section>
+          </div>
+        </aside>
+      </div>
+
+      {settings.chatEnabled ? (
+        <>
+          <button
+            className="fixed bottom-5 right-5 z-40 inline-flex h-12 w-12 items-center justify-center rounded-full bg-brand-500 text-white shadow-xl shadow-brand-500/25 transition hover:bg-brand-600"
+            type="button"
+            aria-label="Open chat"
+            onClick={() => setChatOpen(true)}
+          >
+            <MessageSquare size={20} />
+            {chatMessages.length > 0 ? (
+              <span className="absolute -right-1 -top-1 grid h-5 min-w-5 place-items-center rounded-full bg-slate-950 px-1 text-[10px] font-bold text-white">
+                {chatMessages.length}
+              </span>
+            ) : null}
+          </button>
+
+          {chatOpen ? (
+            <div className="fixed bottom-20 right-5 z-50 w-[min(420px,calc(100vw-2rem))] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl">
+              <div className="flex items-center justify-between border-b border-slate-200 bg-slate-50 px-4 py-3">
+                <div>
+                  <p className="text-sm font-semibold text-slate-950">Chat</p>
+                  <p className="text-[11px] font-semibold text-slate-500">Temporary messages for this assessment</p>
+                </div>
+                <button className="secondary-button h-8 w-8 p-0" type="button" onClick={() => setChatOpen(false)} aria-label="Close chat">
+                  <X size={15} />
+                </button>
+              </div>
+              <div className="max-h-80 space-y-2 overflow-y-auto p-3">
                 {chatMessages.length === 0 ? (
-                  <p className="text-xs font-semibold text-slate-400">No messages yet.</p>
+                  <p className="rounded-lg bg-slate-50 px-3 py-4 text-center text-xs font-semibold text-slate-400">No messages yet.</p>
                 ) : chatMessages.map((message) => (
                   <div key={message.id} className={`max-w-[88%] rounded-lg px-3 py-2 text-xs font-semibold leading-5 ${message.senderRole === 'proctor' ? 'ml-auto bg-brand-500 text-white' : 'bg-slate-100 text-slate-700'}`}>
                     <p>{message.text}</p>
@@ -530,51 +643,14 @@ function FocusedMonitorPage({
               </div>
               <form className="flex gap-2 border-t border-slate-200 p-3" onSubmit={(event) => { event.preventDefault(); onSendChat(student); }}>
                 <input className="field-input h-9 text-sm" value={chatDraft} onChange={(event) => onChatDraftChange(event.target.value)} placeholder="Message student" />
-                <button className="primary-button h-9 px-3 text-xs" type="submit" disabled={!chatDraft.trim()}><Send size={14} /></button>
+                <button className="primary-button h-9 px-3 text-xs" type="submit" disabled={!chatDraft.trim()}>
+                  <Send size={14} />
+                </button>
               </form>
             </div>
           ) : null}
-
-          {settings.ufmActionEnabled ? (
-            <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 shadow-sm">
-              <label className="field-label text-amber-700">UFM review note</label>
-              <textarea className="field-input mt-2 min-h-24 bg-white" value={ufmReason} onChange={(event) => setUfmReason(event.target.value)} placeholder="Reason visible in admin report" />
-              <button
-                className="mt-3 inline-flex h-9 w-full items-center justify-center gap-2 rounded-md bg-amber-600 px-3 text-xs font-semibold text-white transition hover:bg-amber-700 disabled:cursor-not-allowed disabled:bg-slate-300"
-                type="button"
-                disabled={isMarkingUfm || !ufmReason.trim()}
-                onClick={async () => {
-                  const ok = await onMarkUfm(student, ufmReason);
-                  if (ok) setUfmReason('');
-                }}
-              >
-                <ShieldAlert size={14} />
-                {isMarkingUfm ? 'Marking...' : 'Mark UFM pending'}
-              </button>
-            </div>
-          ) : null}
-
-          <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-            <div className="border-b border-slate-200 bg-slate-50 px-4 py-3">
-              <p className="text-sm font-semibold text-slate-950">Recent alerts</p>
-            </div>
-            <div className="max-h-72 overflow-y-auto p-3">
-              {alerts.length === 0 ? (
-                <p className="text-xs font-semibold text-slate-400">No alerts for this student.</p>
-              ) : alerts.map((alert) => (
-                <div key={alert.id || `${alert.type}-${alert.occurredAt}`} className="mb-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
-                  <div className="flex items-center justify-between gap-2">
-                    <p className="text-xs font-bold text-slate-800">{String(alert.type || 'activity').replace(/_/g, ' ')}</p>
-                    <span className={`text-[10px] font-bold uppercase ${alert.severity === 'critical' ? 'text-red-600' : 'text-amber-600'}`}>{alert.severity || 'info'}</span>
-                  </div>
-                  <p className="mt-1 line-clamp-2 text-xs font-semibold text-slate-500">{alert.message || 'Activity detected'}</p>
-                  <p className="mt-1 text-[10px] font-semibold text-slate-400">{formatDateTime(alert.occurredAt)}</p>
-                </div>
-              ))}
-            </div>
-          </div>
-        </aside>
-      </div>
+        </>
+      ) : null}
     </section>
   );
 }
