@@ -12,15 +12,33 @@ function generateProctorId() {
   return `PRC-${year}-${random}`;
 }
 
-function generatePassword(length = 10) {
-  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789@#';
-  let password = '';
+function shuffle(value) {
+  const characters = value.split('');
+  for (let index = characters.length - 1; index > 0; index -= 1) {
+    const swapIndex = crypto.randomInt(0, index + 1);
+    [characters[index], characters[swapIndex]] = [characters[swapIndex], characters[index]];
+  }
+  return characters.join('');
+}
 
-  for (let index = 0; index < length; index += 1) {
-    password += alphabet[crypto.randomInt(0, alphabet.length)];
+function pick(alphabet) {
+  return alphabet[crypto.randomInt(0, alphabet.length)];
+}
+
+function generatePassword(length = 10) {
+  const uppercase = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+  const lowercase = 'abcdefghijkmnopqrstuvwxyz';
+  const digits = '23456789';
+  const special = '@#%!';
+  const alphabet = `${uppercase}${lowercase}${digits}${special}`;
+  const safeLength = Math.max(Number(length || 10), 10);
+  let password = `${pick(uppercase)}${pick(lowercase)}${pick(digits)}${pick(special)}`;
+
+  for (let index = password.length; index < safeLength; index += 1) {
+    password += pick(alphabet);
   }
 
-  return password;
+  return shuffle(password);
 }
 
 module.exports = {

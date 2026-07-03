@@ -51,6 +51,8 @@ async function ensureProctorLoginUser(proctor) {
   }
 
   const passwordHash = user?.passwordPreview ? user.passwordHash : await User.hashPassword(loginPassword);
+  const didRotateLoginPassword = !user?.passwordPreview;
+  const passwordChangedAt = didRotateLoginPassword ? new Date() : user?.passwordChangedAt;
 
   user = await User.findOneAndUpdate(
     { email: proctor.email, role: ROLES.PROCTOR },
@@ -65,6 +67,8 @@ async function ensureProctorLoginUser(proctor) {
         role: ROLES.PROCTOR,
         status: 'active',
         mustChangePassword: true,
+        ownerAdminId: proctor.ownerAdminId,
+        ...(didRotateLoginPassword ? { passwordChangedAt, tokenInvalidBefore: passwordChangedAt } : {}),
       },
     },
     { new: true, upsert: true, setDefaultsOnInsert: true }

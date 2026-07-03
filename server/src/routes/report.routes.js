@@ -7,11 +7,14 @@ const AssessmentSecurityEvent = require('../models/AssessmentSecurityEvent');
 const AssessmentStudent = require('../models/AssessmentStudent');
 const { ROLES } = require('../constants/roles');
 const { authenticate, requirePermission, requireRole } = require('../middleware/auth');
+const { validateObjectIdParams } = require('../middleware/validate');
 const { writeAuditLog } = require('../services/audit.service');
 
 const router = express.Router();
 
 router.use(authenticate, requireRole(ROLES.SUPER_ADMIN, ROLES.ADMIN));
+router.use('/assessments/:assessmentId', validateObjectIdParams('assessmentId'));
+router.use('/assessments/:assessmentId/candidates/:assignmentId', validateObjectIdParams('assignmentId'));
 
 function getScopedQuery(req) {
   return req.user.role === ROLES.SUPER_ADMIN ? {} : { ownerAdminId: req.user._id };

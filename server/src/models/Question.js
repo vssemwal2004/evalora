@@ -105,5 +105,8 @@ const questionSchema = new mongoose.Schema(
 
 questionSchema.index({ questionText: 'text', paperHeading: 'text', courseName: 'text', courseId: 'text', tags: 'text' });
 questionSchema.index({ ownerAdminId: 1, paperHeading: 1, createdAt: -1 });
+questionSchema.index({ ownerAdminId: 1, status: 1, paperHeading: 1, createdAt: -1 });
+questionSchema.index({ createdBy: 1, status: 1, paperHeading: 1, createdAt: -1 });
+questionSchema.index({ ownerAdminId: 1, status: 1, type: 1, difficulty: 1 });
 
 module.exports = mongoose.model('Question', questionSchema);

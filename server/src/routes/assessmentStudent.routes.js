@@ -216,6 +216,7 @@ async function createOrReplaceStudentAssignment({ assessment, row, decision, act
   const generatedExamId = await generateUniqueExamId();
   const plainPassword = generatePassword(10);
   const passwordHash = await User.hashPassword(plainPassword);
+  const passwordChangedAt = new Date();
   const eligibilityStatus = decision === 'not_eligible' ? 'not_eligible' : row.eligibilityStatus || 'eligible';
   await User.findOneAndUpdate(
     { email: row.email, role: ROLES.STUDENT },
@@ -228,6 +229,9 @@ async function createOrReplaceStudentAssignment({ assessment, row, decision, act
         passwordHash,
         role: ROLES.STUDENT,
         status: 'active',
+        ownerAdminId: assessment.ownerAdminId,
+        passwordChangedAt,
+        tokenInvalidBefore: passwordChangedAt,
       },
     },
     { new: true, upsert: true, setDefaultsOnInsert: true }
@@ -488,6 +492,7 @@ router.post('/', adminWriteLimiter, validateBody(addStudentBodySchema), requireP
 
     const plainPassword = generatePassword(10);
     const passwordHash = await User.hashPassword(plainPassword);
+    const passwordChangedAt = new Date();
     await User.findOneAndUpdate(
       { email: normalizedEmail, role: ROLES.STUDENT },
       {
@@ -499,6 +504,9 @@ router.post('/', adminWriteLimiter, validateBody(addStudentBodySchema), requireP
           passwordHash,
           role: ROLES.STUDENT,
           status: 'active',
+          ownerAdminId: assessment.ownerAdminId,
+          passwordChangedAt,
+          tokenInvalidBefore: passwordChangedAt,
         },
       },
       { new: true, upsert: true, setDefaultsOnInsert: true }

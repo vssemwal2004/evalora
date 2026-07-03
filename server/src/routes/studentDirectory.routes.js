@@ -5,10 +5,15 @@ const StudentProfile = require('../models/StudentProfile');
 const User = require('../models/User');
 const { ROLES } = require('../constants/roles');
 const { authenticate, requirePermission, requireRole } = require('../middleware/auth');
+const { objectIdString, validateBody, validateObjectIdParams, z } = require('../middleware/validate');
 const { writeAuditLog } = require('../services/audit.service');
 const { sendStudentCredentialMail } = require('../services/credentialMail.service');
 
 const router = express.Router();
+const studentBulkActionBodySchema = z.object({
+  ids: z.array(objectIdString).min(1, 'Select at least one student.').max(1000, 'Select 1000 students or fewer.'),
+  action: z.enum(['enable', 'disable', 'delete']),
+});
 
 router.use(authenticate, requireRole(ROLES.SUPER_ADMIN, ROLES.ADMIN));
 
@@ -176,7 +181,7 @@ router.get('/', requirePermission('student.view'), async (req, res, next) => {
   }
 });
 
-router.patch('/:id', requirePermission('student.edit'), async (req, res, next) => {
+router.patch('/:id', validateObjectIdParams('id'), requirePermission('student.edit'), async (req, res, next) => {
   try {
     const student = await findScopedStudent(req, req.params.id);
     if (!student) return res.status(404).json({ message: 'Student not found.' });
@@ -232,7 +237,7 @@ router.patch('/:id', requirePermission('student.edit'), async (req, res, next) =
   }
 });
 
-router.patch('/:id/status', requirePermission('student.edit'), async (req, res, next) => {
+router.patch('/:id/status', validateObjectIdParams('id'), requirePermission('student.edit'), async (req, res, next) => {
   try {
     const student = await findScopedStudent(req, req.params.id);
     if (!student) return res.status(404).json({ message: 'Student not found.' });
@@ -260,7 +265,7 @@ router.patch('/:id/status', requirePermission('student.edit'), async (req, res, 
   }
 });
 
-router.post('/:id/send-mail', requirePermission('mail.send'), async (req, res, next) => {
+router.post('/:id/send-mail', validateObjectIdParams('id'), requirePermission('mail.send'), async (req, res, next) => {
   let student;
 
   try {
@@ -302,13 +307,11 @@ router.post('/:id/send-mail', requirePermission('mail.send'), async (req, res, n
   }
 });
 
-router.post('/bulk-action', requirePermission('student.view'), async (req, res, next) => {
+router.post('/bulk-action', validateBody(studentBulkActionBodySchema), requirePermission('student.view'), async (req, res, next) => {
   try {
-    const ids = Array.isArray(req.body.ids) ? req.body.ids : [];
-    const action = String(req.body.action || '').trim();
+    const ids = req.body.ids;
+    const action = req.body.action;
 
-    if (ids.length === 0) return res.status(400).json({ message: 'No students selected.' });
-    if (!['enable', 'disable', 'delete'].includes(action)) return res.status(400).json({ message: 'Invalid bulk action.' });
     if (action !== 'delete' && req.user.role !== ROLES.SUPER_ADMIN && !req.user.permissions.includes('student.edit')) {
       return res.status(403).json({ message: 'Permission denied.' });
     }
@@ -342,7 +345,7 @@ router.post('/bulk-action', requirePermission('student.view'), async (req, res, 
   }
 });
 
-router.delete('/:id', requirePermission('student.remove'), async (req, res, next) => {
+router.delete('/:id', validateObjectIdParams('id'), requirePermission('student.remove'), async (req, res, next) => {
   try {
     const student = await AssessmentStudent.findOne({ _id: req.params.id, ...getStudentScope(req) });
     if (!student) return res.status(404).json({ message: 'Student not found.' });

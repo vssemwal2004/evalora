@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { encryptedStringField } = require('../utils/fieldEncryption');
 
 const assignedStudentSchema = new mongoose.Schema(
   {
@@ -60,10 +61,7 @@ const assessmentProctorSchema = new mongoose.Schema(
       required: true,
       select: false,
     },
-    passwordPreview: {
-      type: String,
-      select: false,
-    },
+    passwordPreview: encryptedStringField(),
     assignedStudents: {
       type: [assignedStudentSchema],
       default: [],
@@ -97,10 +95,15 @@ const assessmentProctorSchema = new mongoose.Schema(
 assessmentProctorSchema.index({ assessmentId: 1, email: 1 }, { unique: true });
 assessmentProctorSchema.index({ email: 1, updatedAt: -1 });
 assessmentProctorSchema.index({ assessmentId: 1, mailStatus: 1 });
+assessmentProctorSchema.index({ ownerAdminId: 1, updatedAt: -1 });
+assessmentProctorSchema.index({ assessmentId: 1, activeStatus: 1 });
 
 assessmentProctorSchema.pre('save', function syncCount(next) {
   this.assignedStudentCount = this.assignedStudents.length;
   next();
 });
+
+assessmentProctorSchema.set('toObject', { getters: true });
+assessmentProctorSchema.set('toJSON', { getters: true });
 
 module.exports = mongoose.model('AssessmentProctor', assessmentProctorSchema);

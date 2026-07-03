@@ -108,5 +108,8 @@ const assessmentQuestionSchema = new mongoose.Schema(
 );
 
 assessmentQuestionSchema.index({ assessmentId: 1, courseName: 1, type: 1 });
+assessmentQuestionSchema.index({ assessmentId: 1, courseName: 1, sourcePaperHeading: 1, order: 1, createdAt: 1 });
+assessmentQuestionSchema.index({ assessmentId: 1, libraryQuestionId: 1 });
+assessmentQuestionSchema.index({ ownerAdminId: 1, createdAt: -1 });
 
 module.exports = mongoose.model('AssessmentQuestion', assessmentQuestionSchema);

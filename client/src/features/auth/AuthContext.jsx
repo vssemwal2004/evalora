@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
-import { api } from '../../lib/api';
+import { api, clearCsrfToken, setCsrfToken } from '../../lib/api';
 
 const AuthContext = createContext(null);
 
@@ -15,6 +15,7 @@ export function AuthProvider({ children }) {
     function handleAuthExpired() {
       localStorage.removeItem('evalora_token');
       localStorage.removeItem('evalora_user');
+      clearCsrfToken();
       setToken(null);
       setUser(null);
     }
@@ -42,6 +43,7 @@ export function AuthProvider({ children }) {
         if (!ignore) {
           localStorage.removeItem('evalora_token');
           localStorage.removeItem('evalora_user');
+          clearCsrfToken();
           setToken(null);
           setUser(null);
         }
@@ -63,19 +65,31 @@ export function AuthProvider({ children }) {
     const response = await api.post('/auth/login', payload);
     localStorage.setItem('evalora_token', response.data.token);
     localStorage.setItem('evalora_user', JSON.stringify(response.data.user));
+    setCsrfToken(response.data.csrfToken);
     setToken(response.data.token);
     setUser(response.data.user);
     return response.data.user;
   }
 
   function logout() {
+    api.post('/auth/logout').catch(() => null);
     localStorage.removeItem('evalora_token');
     localStorage.removeItem('evalora_user');
+    clearCsrfToken();
     setToken(null);
     setUser(null);
   }
 
-  const updateUser = useCallback((nextUser) => {
+  const updateUser = useCallback((nextUser, nextToken, nextCsrfToken) => {
+    if (nextToken) {
+      localStorage.setItem('evalora_token', nextToken);
+      setToken(nextToken);
+    }
+
+    if (nextCsrfToken) {
+      setCsrfToken(nextCsrfToken);
+    }
+
     localStorage.setItem('evalora_user', JSON.stringify(nextUser));
     setUser(nextUser);
   }, []);

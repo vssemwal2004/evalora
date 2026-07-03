@@ -1,5 +1,5 @@
-function notFound(req, res) {
-  res.status(404).json({ message: `Route not found: ${req.method} ${req.originalUrl}` });
+function notFound(_req, res) {
+  res.status(404).json({ message: 'Route not found.' });
 }
 
 function normalizeError(error) {

@@ -249,6 +249,9 @@ const assessmentSchema = new mongoose.Schema(
 
 assessmentSchema.index({ assessmentCode: 1, ownerAdminId: 1 }, { unique: true });
 assessmentSchema.index({ status: 1, startAt: 1, endAt: 1 });
+assessmentSchema.index({ ownerAdminId: 1, status: 1, createdAt: -1 });
+assessmentSchema.index({ ownerAdminId: 1, createdBy: 1, createdAt: -1 });
+assessmentSchema.index({ visibility: 1, status: 1, startAt: 1, endAt: 1 });
 
 assessmentSchema.pre('save', function syncCounts(next) {
   this.counts.courses = this.courses.length;

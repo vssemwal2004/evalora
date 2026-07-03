@@ -54,6 +54,12 @@ function courseKey(value) {
   return Course.normalizeCourseKey(value);
 }
 
+function parseListLimit(value, fallback = 200, max = 500) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(Math.max(Math.trunc(parsed), 1), max);
+}
+
 async function findDuplicateCourse(req, { courseName, courseCode, excludeId }) {
   const nameKey = courseKey(courseName);
   const codeKey = courseKey(courseCode);
@@ -154,7 +160,7 @@ router.get('/', requirePermission('course.view'), async (req, res, next) => {
     const items = await Course.find(query)
       .populate('ownerAdminId', 'name email')
       .sort({ courseName: 1, courseCode: 1 })
-      .limit(Math.min(Number(req.query.limit || 500), 1000));
+      .limit(parseListLimit(req.query.limit));
 
     return res.json({ items });
   } catch (error) {

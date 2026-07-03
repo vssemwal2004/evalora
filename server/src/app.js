@@ -6,6 +6,7 @@ const morgan = require('morgan');
 const env = require('./config/env');
 const routes = require('./routes');
 const { activityLogger } = require('./middleware/activityLogger');
+const { csrfProtection } = require('./middleware/csrf');
 const { errorHandler, notFound } = require('./middleware/errorHandler');
 const { globalApiLimiter } = require('./middleware/rateLimit');
 const { rejectUnsafeRequestKeys } = require('./middleware/requestSecurity');
@@ -51,7 +52,12 @@ app.get('/', (_req, res) => {
   });
 });
 
+app.use('/api', (_req, res, next) => {
+  res.set('Cache-Control', 'no-store');
+  return next();
+});
 app.use('/api', globalApiLimiter);
+app.use('/api', csrfProtection);
 
 app.use('/api', activityLogger, routes);
 

@@ -120,6 +120,12 @@ function normalizeCourseCode(value) {
   return String(value || '').trim().toUpperCase();
 }
 
+function parseListLimit(value, fallback = 200, max = 500) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(Math.max(Math.trunc(parsed), 1), max);
+}
+
 function isStrongPassword(password) {
   const value = String(password || '');
   return value.length > 8 && /[A-Z]/.test(value) && /[^A-Za-z0-9]/.test(value);
@@ -277,7 +283,7 @@ router.get('/:kind', async (req, res, next) => {
     const items = await User.find(query)
       .select('+passwordPreview')
       .sort({ createdAt: -1 })
-      .limit(Math.min(Number(req.query.limit || 500), 1000));
+      .limit(parseListLimit(req.query.limit));
 
     return res.json({ items: items.map((person) => serializePerson(person, true)) });
   } catch (error) {
@@ -634,7 +640,8 @@ router.patch('/:kind/:id/password', adminWriteLimiter, validateObjectIdParams('i
     person.passwordHash = await User.hashPassword(newPassword);
     person.passwordPreview = newPassword;
     person.mustChangePassword = true;
-    person.passwordChangedAt = undefined;
+    person.passwordChangedAt = new Date();
+    person.tokenInvalidBefore = person.passwordChangedAt;
     await person.save();
 
     let mailStatus = 'not_sent';

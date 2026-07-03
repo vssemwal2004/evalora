@@ -1,5 +1,6 @@
 const bcrypt = require('bcryptjs');
 const mongoose = require('mongoose');
+const { encryptedStringField } = require('../utils/fieldEncryption');
 
 const historySchema = new mongoose.Schema(
   {
@@ -23,7 +24,7 @@ const assessmentAssignmentSchema = new mongoose.Schema(
     facultyId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
     moderatorId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
     passwordHash: { type: String, required: true, select: false },
-    passwordPreview: { type: String, required: true, select: false },
+    passwordPreview: encryptedStringField({ required: true }),
     status: {
       type: String,
       enum: ['assigned', 'in_progress', 'submitted', 'rejected', 'approved'],
@@ -45,11 +46,18 @@ assessmentAssignmentSchema.index(
   { assessmentId: 1, courseKey: 1 },
   { unique: true, partialFilterExpression: { courseKey: { $type: 'string' } } }
 );
+assessmentAssignmentSchema.index({ facultyId: 1, updatedAt: -1 });
+assessmentAssignmentSchema.index({ moderatorId: 1, updatedAt: -1 });
+assessmentAssignmentSchema.index({ assessmentId: 1, status: 1 });
+assessmentAssignmentSchema.index({ ownerAdminId: 1, status: 1, updatedAt: -1 });
 assessmentAssignmentSchema.methods.comparePassword = function comparePassword(password) {
   return bcrypt.compare(password, this.passwordHash);
 };
 assessmentAssignmentSchema.statics.hashPassword = function hashPassword(password) {
   return bcrypt.hash(password, 12);
 };
+
+assessmentAssignmentSchema.set('toObject', { getters: true });
+assessmentAssignmentSchema.set('toJSON', { getters: true });
 
 module.exports = mongoose.model('AssessmentAssignment', assessmentAssignmentSchema);

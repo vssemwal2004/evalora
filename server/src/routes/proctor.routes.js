@@ -187,6 +187,7 @@ router.post('/assignments/:assignmentId/verify', proctorVerifyLimiter, validateB
       action: 'proctor.assessment.open',
       targetType: 'AssessmentProctor',
       targetId: assignment._id,
+      ownerAdminId: assignment.ownerAdminId,
       newValue: {
         assessmentId: assessment._id,
         assignedStudents: students.length,
@@ -331,6 +332,7 @@ router.post('/assignments/:assignmentId/students/:studentId/ufm', proctorActionL
       action: 'proctor.ufm.mark_pending',
       targetType: 'AssessmentStudent',
       targetId: student._id,
+      ownerAdminId: assessment.ownerAdminId,
       newValue: {
         assessmentId: assessment._id,
         reason,

@@ -6,16 +6,20 @@ const AuditLog = require('../models/AuditLog');
 const EmailTemplate = require('../models/EmailTemplate');
 const User = require('../models/User');
 const { ROLES } = require('../constants/roles');
-const { authenticate } = require('../middleware/auth');
+const { authenticate, requirePermission, requireRole } = require('../middleware/auth');
 
 const router = express.Router();
 
-router.use(authenticate);
+router.use(authenticate, requireRole(ROLES.SUPER_ADMIN, ROLES.ADMIN));
 
-router.get('/summary', async (req, res, next) => {
+router.get('/summary', requirePermission('dashboard.view'), async (req, res, next) => {
   try {
     const assessmentScope = req.user.role === ROLES.SUPER_ADMIN ? {} : { ownerAdminId: req.user._id };
     const userScope = req.user.role === ROLES.SUPER_ADMIN ? {} : { ownerAdminId: req.user._id };
+    const activityScope = {
+      action: { $not: { $regex: '^request\\.' } },
+      ...(req.user.role === ROLES.SUPER_ADMIN ? {} : { ownerAdminId: req.user._id }),
+    };
     const [admins, faculty, moderators, students, proctors, assessments, reviewAssessments, publishedAssessments, pendingStudentMails, pendingProctorMails, emailTemplates, recentActivity] = await Promise.all([
       User.countDocuments({ role: ROLES.ADMIN }),
       User.countDocuments({ ...userScope, role: ROLES.FACULTY }),
@@ -28,7 +32,7 @@ router.get('/summary', async (req, res, next) => {
       AssessmentStudent.countDocuments({ ...assessmentScope, mailStatus: { $nin: ['sent', 'resent'] } }),
       AssessmentProctor.countDocuments({ ...assessmentScope, mailStatus: { $nin: ['sent', 'resent'] } }),
       EmailTemplate.countDocuments({ status: 'active' }),
-      AuditLog.find({ action: { $not: { $regex: '^request\\.' } } })
+      AuditLog.find(activityScope)
         .sort({ createdAt: -1 })
         .limit(8)
         .select('action targetType reason actorRole actorName createdAt newValue'),

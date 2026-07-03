@@ -11,8 +11,25 @@ const { normalizeQuestionPayload } = require('../utils/questionValidation');
 const { sendAssignmentMail } = require('../services/credentialMail.service');
 const { writeAuditLog } = require('../services/audit.service');
 const { getCourseKey, pickPrimaryAssignment } = require('../services/assignment.service');
+const { objectIdString, validateBody, validateObjectIdParams, z } = require('../middleware/validate');
 
 const router = express.Router();
+const unlockBodySchema = z.object({
+  password: z.string().min(1, 'Assignment password is required.').max(200),
+});
+const importQuestionsBodySchema = z.object({
+  questionIds: z.array(objectIdString).min(1, 'Select at least one question.').max(500, 'Import 500 questions or fewer at once.'),
+});
+const importHeadingsBodySchema = z.object({
+  paperHeadings: z.array(z.string().trim().min(1).max(300)).min(1, 'Select at least one library folder.').max(100),
+});
+const submitBodySchema = z.object({
+  message: z.string().trim().max(2000).optional().default(''),
+});
+const decisionBodySchema = z.object({
+  decision: z.enum(['approve', 'reject']),
+  reason: z.string().trim().max(2000).optional().default(''),
+});
 router.use(authenticate, requireRole(ROLES.FACULTY, ROLES.MODERATOR));
 
 function hasPermission(req, permission) {
@@ -82,7 +99,10 @@ router.get('/', async (req, res, next) => {
   } catch (error) { return next(error); }
 });
 
-router.post('/:id/unlock', async (req, res, next) => {
+router.use('/:id', validateObjectIdParams('id'));
+router.use('/:id/questions/:questionId', validateObjectIdParams('questionId'));
+
+router.post('/:id/unlock', validateBody(unlockBodySchema), async (req, res, next) => {
   try {
     const assignment = await AssessmentAssignment.findOne({ _id: req.params.id, ...assignmentScope(req) }).select('+passwordHash');
     if (!assignment) return res.status(404).json({ message: 'Assigned work was not found.' });
@@ -146,11 +166,11 @@ router.post('/:id/questions', async (req, res, next) => {
   } catch (error) { return next(error); }
 });
 
-router.post('/:id/questions/import', async (req, res, next) => {
+router.post('/:id/questions/import', validateBody(importQuestionsBodySchema), async (req, res, next) => {
   try {
     const assignment = await findAssignment(req, { tokenRequired: true });
     if (!assignment || req.user.role !== ROLES.FACULTY || !hasPermission(req, 'assessment.questions.add') || !hasPermission(req, 'library.view')) return res.status(403).json({ message: 'Library import access has not been granted.' });
-    const ids = Array.isArray(req.body.questionIds) ? req.body.questionIds : [];
+    const ids = req.body.questionIds;
     const source = await Question.find({ _id: { $in: ids }, createdBy: req.user._id, status: 'active' });
     const created = await AssessmentQuestion.insertMany(source.map((q) => ({
       ...normalizeQuestionPayload(q.toObject()), assessmentId: assignment.assessmentId, ownerAdminId: assignment.ownerAdminId,
@@ -172,17 +192,14 @@ router.post('/:id/questions/import', async (req, res, next) => {
   } catch (error) { return next(error); }
 });
 
-router.post('/:id/questions/import-headings', async (req, res, next) => {
+router.post('/:id/questions/import-headings', validateBody(importHeadingsBodySchema), async (req, res, next) => {
   try {
     const assignment = await findAssignment(req, { tokenRequired: true });
     if (!assignment || req.user.role !== ROLES.FACULTY || !hasPermission(req, 'assessment.questions.add') || !hasPermission(req, 'library.view')) {
       return res.status(403).json({ message: 'Library import access has not been granted.' });
     }
 
-    const paperHeadings = Array.from(new Set((Array.isArray(req.body.paperHeadings) ? req.body.paperHeadings : [])
-      .map((heading) => String(heading || '').trim())
-      .filter(Boolean)));
-    if (!paperHeadings.length) return res.status(400).json({ message: 'Select at least one library folder.' });
+    const paperHeadings = Array.from(new Set(req.body.paperHeadings));
 
     const source = await Question.find({
       paperHeading: { $in: paperHeadings },
@@ -257,7 +274,7 @@ router.patch('/:id/questions/:questionId', async (req, res, next) => {
   } catch (error) { return next(error); }
 });
 
-router.post('/:id/submit', async (req, res, next) => {
+router.post('/:id/submit', validateBody(submitBodySchema), async (req, res, next) => {
   try {
     const assignment = await findAssignment(req, { tokenRequired: true });
     if (!assignment || req.user.role !== ROLES.FACULTY || !hasPermission(req, 'assessment.submit')) return res.status(403).json({ message: 'Assessment submission access has not been granted.' });
@@ -290,12 +307,11 @@ router.post('/:id/submit', async (req, res, next) => {
   } catch (error) { return next(error); }
 });
 
-router.post('/:id/decision', async (req, res, next) => {
+router.post('/:id/decision', validateBody(decisionBodySchema), async (req, res, next) => {
   try {
     const assignment = await findAssignment(req, { tokenRequired: true });
     if (!assignment || req.user.role !== ROLES.MODERATOR || !hasPermission(req, 'assessment.review')) return res.status(403).json({ message: 'Assessment review access has not been granted.' });
-    const decision = String(req.body.decision || ''); const reason = String(req.body.reason || '').trim();
-    if (!['approve', 'reject'].includes(decision)) return res.status(400).json({ message: 'Choose approve or reject.' });
+    const decision = req.body.decision; const reason = req.body.reason;
     if (decision === 'reject' && reason.length < 5) return res.status(400).json({ message: 'Enter a clear rejection reason.' });
     assignment.status = decision === 'approve' ? 'approved' : 'rejected'; assignment.rejectionReason = decision === 'reject' ? reason : ''; assignment.reviewedAt = new Date();
     assignment.history.push({ action: assignment.status, message: reason, actorId: req.user._id, actorName: req.user.name });

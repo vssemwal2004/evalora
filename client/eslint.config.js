@@ -21,6 +21,9 @@ export default [
         setTimeout: 'readonly',
         window: 'readonly',
         navigator: 'readonly',
+        RTCPeerConnection: 'readonly',
+        RTCSessionDescription: 'readonly',
+        RTCIceCandidate: 'readonly',
       },
       parserOptions: {
         ecmaFeatures: {

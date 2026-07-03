@@ -57,7 +57,7 @@ function ChangePasswordDrawer({ required, open, onClose }) {
     setIsSaving(true);
     try {
       const response = await api.patch('/auth/password', form);
-      updateUser(response.data.user);
+      updateUser(response.data.user, response.data.token, response.data.csrfToken);
       setNotice(response.data.message || 'Password changed successfully.');
       setForm({ currentPassword: '', newPassword: '', confirmPassword: '' });
 

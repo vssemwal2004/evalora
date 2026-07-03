@@ -88,5 +88,6 @@ assessmentSecurityEventSchema.index({ attemptId: 1, type: 1, occurredAt: -1 });
 assessmentSecurityEventSchema.index({ assessmentId: 1, assessmentStudentId: 1, occurredAt: -1 });
 assessmentSecurityEventSchema.index({ assessmentId: 1, severity: 1, occurredAt: -1 });
 assessmentSecurityEventSchema.index({ ownerAdminId: 1, occurredAt: -1 });
+assessmentSecurityEventSchema.index({ assessmentId: 1, severity: 1, assessmentStudentId: 1, occurredAt: -1 });
 
 module.exports = mongoose.model('AssessmentSecurityEvent', assessmentSecurityEventSchema);

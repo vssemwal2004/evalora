@@ -12,6 +12,11 @@ const auditLogSchema = new mongoose.Schema(
     },
     actorName: String,
     actorEmail: String,
+    ownerAdminId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      index: true,
+    },
     action: {
       type: String,
       required: true,
@@ -36,7 +41,10 @@ const auditLogSchema = new mongoose.Schema(
 );
 
 auditLogSchema.index({ createdAt: 1 }, { expireAfterSeconds: 10 * 24 * 60 * 60 });
+auditLogSchema.index({ ownerAdminId: 1, createdAt: -1 });
 auditLogSchema.index({ actorId: 1, createdAt: -1 });
 auditLogSchema.index({ targetType: 1, targetId: 1 });
+auditLogSchema.index({ ownerAdminId: 1, actorRole: 1, createdAt: -1 });
+auditLogSchema.index({ ownerAdminId: 1, action: 1, createdAt: -1 });
 
 module.exports = mongoose.model('AuditLog', auditLogSchema);

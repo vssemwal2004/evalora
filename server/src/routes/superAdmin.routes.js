@@ -30,6 +30,11 @@ const adminStatusBodySchema = z.object({
 
 router.use(authenticate, requireRole(ROLES.SUPER_ADMIN));
 
+function isStrongPassword(password) {
+  const value = String(password || '');
+  return value.length > 8 && /[A-Z]/.test(value) && /[^A-Za-z0-9]/.test(value);
+}
+
 router.get('/admins', async (req, res, next) => {
   try {
     const page = Math.max(Number(req.query.page || 1), 1);
@@ -80,8 +85,14 @@ router.post('/admins', adminWriteLimiter, validateBody(adminCreateBodySchema), a
     if (!name || !email || !password) {
       return res.status(400).json({ message: 'Name, email, and password are required.' });
     }
+    if (!isStrongPassword(password)) {
+      return res.status(400).json({
+        message: 'Use a strong password with more than 8 characters, 1 capital letter, and 1 special character.',
+      });
+    }
 
     const normalizedEmail = String(email).trim().toLowerCase();
+    const passwordChangedAt = new Date();
     const existing = await User.findOne({
       $or: [{ email: normalizedEmail }, { loginId: normalizedEmail }, { uniqueUsername: normalizedEmail }],
     }).select('email loginId uniqueUsername role');
@@ -94,7 +105,8 @@ router.post('/admins', adminWriteLimiter, validateBody(adminCreateBodySchema), a
         existing.uniqueUsername = existing.uniqueUsername || normalizedEmail;
         existing.passwordHash = await User.hashPassword(password);
         existing.mustChangePassword = true;
-        existing.passwordChangedAt = undefined;
+        existing.passwordChangedAt = passwordChangedAt;
+        existing.tokenInvalidBefore = passwordChangedAt;
         existing.role = ROLES.ADMIN;
         existing.status = 'active';
         existing.permissions = permissions;
@@ -147,6 +159,8 @@ router.post('/admins', adminWriteLimiter, validateBody(adminCreateBodySchema), a
       role: ROLES.ADMIN,
       permissions,
       mustChangePassword: true,
+      passwordChangedAt,
+      tokenInvalidBefore: passwordChangedAt,
     });
 
     await writeAuditLog(req, {

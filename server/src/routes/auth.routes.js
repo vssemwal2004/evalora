@@ -4,13 +4,16 @@ const AssessmentProctor = require('../models/AssessmentProctor');
 const AssessmentStudent = require('../models/AssessmentStudent');
 const User = require('../models/User');
 const { ROLES } = require('../constants/roles');
+const env = require('../config/env');
 const { authenticate } = require('../middleware/auth');
+const { clearCsrfCookie, setCsrfCookie } = require('../middleware/csrf');
 const { authLoginLimiter, passwordChangeLimiter } = require('../middleware/rateLimit');
 const { validateBody, z } = require('../middleware/validate');
 const { writeAuditLog } = require('../services/audit.service');
 const { signAuthToken } = require('../utils/tokens');
 
 const router = express.Router();
+const SENSITIVE_USER_FIELDS = '+passwordHash +activeSessionId +tokenInvalidBefore +failedLoginAttempts +lastFailedLoginAt +loginLockedUntil';
 const loginBodySchema = z.object({
   identifier: z.string().trim().min(1, 'Login ID/email is required.').max(320),
   password: z.string().min(1, 'Password is required.').max(200),
@@ -38,6 +41,71 @@ function serializeAuthUser(user) {
   };
 }
 
+function authCookieOptions() {
+  return {
+    httpOnly: true,
+    sameSite: env.nodeEnv === 'production' ? 'strict' : 'lax',
+    secure: env.auth.cookieSecure,
+    maxAge: env.auth.cookieMaxAgeMs,
+    path: '/',
+  };
+}
+
+function setAuthCookie(res, token) {
+  res.cookie(env.auth.cookieName, token, authCookieOptions());
+}
+
+function clearAuthCookie(res) {
+  res.clearCookie(env.auth.cookieName, {
+    httpOnly: true,
+    sameSite: env.nodeEnv === 'production' ? 'strict' : 'lax',
+    secure: env.auth.cookieSecure,
+    path: '/',
+  });
+  res.clearCookie('token', { path: '/' });
+  clearCsrfCookie(res);
+}
+
+function getLockSeconds(user) {
+  if (!user?.loginLockedUntil) return 0;
+  return Math.max(Math.ceil((user.loginLockedUntil.getTime() - Date.now()) / 1000), 0);
+}
+
+function lockedResponse(res, user) {
+  const retryAfterSeconds = getLockSeconds(user);
+  if (retryAfterSeconds > 0) res.set('Retry-After', String(retryAfterSeconds));
+  return res.status(423).json({
+    code: 'ACCOUNT_LOCKED',
+    message: `Too many failed login attempts. Try again in ${Math.max(Math.ceil(retryAfterSeconds / 60), 1)} minute(s).`,
+    retryAfterSeconds,
+  });
+}
+
+async function recordLoginFailure(req, user, metadata = {}) {
+  if (!user) return null;
+
+  await user.recordFailedLogin({
+    maxAttempts: env.auth.loginMaxFailedAttempts,
+    windowMs: env.auth.loginFailureWindowMs,
+    lockMs: env.auth.loginLockMs,
+  });
+
+  await writeAuditLog(req, {
+    action: user.isLoginLocked() ? 'auth.login_locked' : 'auth.login_failed',
+    targetType: 'User',
+    targetId: user._id,
+    metadata: {
+      role: user.role,
+      loginId: user.loginId,
+      failedLoginAttempts: user.failedLoginAttempts,
+      lockedUntil: user.loginLockedUntil,
+      ...metadata,
+    },
+  });
+
+  return user;
+}
+
 router.post('/login', authLoginLimiter, validateBody(loginBodySchema), async (req, res, next) => {
   try {
     const { identifier, password } = req.body;
@@ -55,10 +123,20 @@ router.post('/login', authLoginLimiter, validateBody(loginBodySchema), async (re
         { uniqueUsername: identifier.trim() },
         { uniqueUsername: normalizedIdentifier },
       ],
-    }).select('+passwordHash');
+    }).select(SENSITIVE_USER_FIELDS);
 
     let authenticatedUser = user;
     let isValid = false;
+
+    if (authenticatedUser?.isLoginLocked()) {
+      await writeAuditLog(req, {
+        action: 'auth.login_blocked_locked',
+        targetType: 'User',
+        targetId: authenticatedUser._id,
+        metadata: { role: authenticatedUser.role, loginId: authenticatedUser.loginId },
+      });
+      return lockedResponse(res, authenticatedUser);
+    }
 
     if (authenticatedUser?.status === 'active') {
       isValid = await authenticatedUser.comparePassword(password);
@@ -87,10 +165,11 @@ router.post('/login', authLoginLimiter, validateBody(loginBodySchema), async (re
                 passwordHash: assignment.passwordHash,
                 role: ROLES.STUDENT,
                 status: assignment.examStatus === 'blocked' ? 'blocked' : 'active',
+                ownerAdminId: assignment.ownerAdminId,
               },
             },
             { new: true, upsert: true, setDefaultsOnInsert: true }
-          ).select('+passwordHash');
+          ).select(SENSITIVE_USER_FIELDS);
           isValid = authenticatedUser.status === 'active';
         }
       }
@@ -105,7 +184,11 @@ router.post('/login', authLoginLimiter, validateBody(loginBodySchema), async (re
       }).select('+passwordHash');
 
       for (const assignment of proctorAssignments) {
-        const proctorUser = await User.findOne({ email: assignment.email, role: ROLES.PROCTOR }).select('+passwordHash');
+        const proctorUser = await User.findOne({ email: assignment.email, role: ROLES.PROCTOR }).select(SENSITIVE_USER_FIELDS);
+        if (proctorUser?.isLoginLocked()) {
+          continue;
+        }
+
         const isUserCredentialValid = proctorUser?.status === 'active' && await proctorUser.comparePassword(password);
         const isLegacyAssignmentCredentialValid = await User.schema.methods.comparePassword.call(assignment, password);
 
@@ -124,22 +207,33 @@ router.post('/login', authLoginLimiter, validateBody(loginBodySchema), async (re
               passwordHash: isUserCredentialValid ? proctorUser.passwordHash : assignment.passwordHash,
               role: ROLES.PROCTOR,
               status: 'active',
+              ownerAdminId: assignment.ownerAdminId,
             },
           },
           { new: true, upsert: true, setDefaultsOnInsert: true }
-        ).select('+passwordHash');
+        ).select(SENSITIVE_USER_FIELDS);
         isValid = true;
         break;
       }
     }
 
     if (!authenticatedUser || authenticatedUser.status !== 'active' || !isValid) {
+      const failedUser = user?.status === 'active' ? await recordLoginFailure(req, user, { identifier: normalizedIdentifier }) : null;
+      if (failedUser?.isLoginLocked()) {
+        return lockedResponse(res, failedUser);
+      }
+
       return res.status(401).json({ message: 'Invalid credentials.' });
     }
 
     authenticatedUser.lastLoginAt = new Date();
     if (authenticatedUser.role === ROLES.STUDENT) {
       authenticatedUser.activeSessionId = crypto.randomBytes(32).toString('hex');
+    }
+    if (typeof authenticatedUser.clearLoginFailures === 'function') {
+      authenticatedUser.failedLoginAttempts = 0;
+      authenticatedUser.lastFailedLoginAt = undefined;
+      authenticatedUser.loginLockedUntil = undefined;
     }
     await authenticatedUser.save();
     req.user = authenticatedUser;
@@ -152,8 +246,11 @@ router.post('/login', authLoginLimiter, validateBody(loginBodySchema), async (re
     });
 
     const token = signAuthToken(authenticatedUser);
+    setAuthCookie(res, token);
+    const csrfToken = setCsrfCookie(res);
 
     return res.json({
+      csrfToken,
       token,
       user: serializeAuthUser(authenticatedUser),
     });
@@ -166,6 +263,33 @@ router.get('/me', authenticate, (req, res) => {
   res.json({
     user: serializeAuthUser(req.user),
   });
+});
+
+router.get('/csrf', authenticate, (_req, res) => {
+  const csrfToken = setCsrfCookie(res);
+  return res.json({ csrfToken });
+});
+
+router.post('/logout', authenticate, async (req, res, next) => {
+  try {
+    if (req.user.role === ROLES.STUDENT) {
+      req.user.activeSessionId = undefined;
+      await req.user.save();
+    }
+
+    clearAuthCookie(res);
+
+    await writeAuditLog(req, {
+      action: 'auth.logout',
+      targetType: 'User',
+      targetId: req.user._id,
+      metadata: { role: req.user.role },
+    });
+
+    return res.json({ message: 'Logged out successfully.' });
+  } catch (error) {
+    return next(error);
+  }
 });
 
 router.patch('/password', authenticate, passwordChangeLimiter, validateBody(passwordBodySchema), async (req, res, next) => {
@@ -186,7 +310,7 @@ router.patch('/password', authenticate, passwordChangeLimiter, validateBody(pass
       });
     }
 
-    const user = await User.findById(req.user._id).select('+passwordHash +passwordPreview');
+    const user = await User.findById(req.user._id).select('+passwordHash +passwordPreview +activeSessionId +tokenInvalidBefore');
     if (!user) {
       return res.status(404).json({ message: 'Account not found.' });
     }
@@ -200,6 +324,7 @@ router.patch('/password', authenticate, passwordChangeLimiter, validateBody(pass
     user.passwordPreview = undefined;
     user.mustChangePassword = false;
     user.passwordChangedAt = new Date();
+    user.tokenInvalidBefore = user.passwordChangedAt;
     await user.save();
 
     await writeAuditLog(req, {
@@ -209,8 +334,14 @@ router.patch('/password', authenticate, passwordChangeLimiter, validateBody(pass
       metadata: { forcedChangeCompleted: Boolean(req.user.mustChangePassword) },
     });
 
+    const token = signAuthToken(user);
+    setAuthCookie(res, token);
+    const csrfToken = setCsrfCookie(res);
+
     return res.json({
+      csrfToken,
       message: 'Password changed successfully.',
+      token,
       user: serializeAuthUser(user),
     });
   } catch (error) {

@@ -1,6 +1,14 @@
 const jwt = require('jsonwebtoken');
 const env = require('../config/env');
 
+function jwtOptions(extra = {}) {
+  return {
+    issuer: env.auth.issuer,
+    audience: env.auth.audience,
+    ...extra,
+  };
+}
+
 function signAuthToken(user) {
   return jwt.sign(
     {
@@ -9,20 +17,24 @@ function signAuthToken(user) {
       sid: user.activeSessionId,
     },
     env.jwtSecret,
-    { expiresIn: '12h' }
+    jwtOptions({ expiresIn: env.auth.tokenTtl })
   );
 }
 
 function verifyAuthToken(token) {
-  return jwt.verify(token, env.jwtSecret);
+  return jwt.verify(token, env.jwtSecret, jwtOptions());
 }
 
 function signAssignmentToken({ assignmentId, userId, role }) {
-  return jwt.sign({ assignmentId: String(assignmentId), sub: String(userId), role, purpose: 'assignment' }, env.jwtSecret, { expiresIn: '2h' });
+  return jwt.sign(
+    { assignmentId: String(assignmentId), sub: String(userId), role, purpose: 'assignment' },
+    env.jwtSecret,
+    jwtOptions({ expiresIn: env.auth.assignmentTokenTtl })
+  );
 }
 
 function verifyAssignmentToken(token) {
-  const payload = jwt.verify(token, env.jwtSecret);
+  const payload = jwt.verify(token, env.jwtSecret, jwtOptions());
   if (payload.purpose !== 'assignment') throw new Error('Invalid assignment access token.');
   return payload;
 }

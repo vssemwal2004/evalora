@@ -1,21 +1,37 @@
 const User = require('../models/User');
 const { ROLES } = require('../constants/roles');
+const env = require('../config/env');
 const { verifyAuthToken } = require('../utils/tokens');
 
 async function authenticate(req, res, next) {
   try {
     const header = req.headers.authorization || '';
-    const token = header.startsWith('Bearer ') ? header.slice(7) : req.cookies?.token;
+    const token = header.startsWith('Bearer ')
+      ? header.slice(7)
+      : req.cookies?.[env.auth.cookieName] || req.cookies?.token;
 
     if (!token) {
       return res.status(401).json({ message: 'Authentication required.' });
     }
 
     const payload = verifyAuthToken(token);
-    const user = await User.findById(payload.sub).select('+activeSessionId');
+    const user = await User.findById(payload.sub).select('+activeSessionId +tokenInvalidBefore');
 
     if (!user || user.status !== 'active') {
       return res.status(401).json({ message: 'Invalid or inactive account.' });
+    }
+
+    if (payload.role !== user.role) {
+      return res.status(401).json({ message: 'Invalid authentication token.' });
+    }
+
+    const issuedAtMs = Number(payload.iat || 0) * 1000;
+    const invalidBefore = user.tokenInvalidBefore || user.passwordChangedAt;
+    if (invalidBefore && issuedAtMs + 1000 < invalidBefore.getTime()) {
+      return res.status(401).json({
+        code: 'SESSION_EXPIRED',
+        message: 'Your session expired after an account security update. Please sign in again.',
+      });
     }
 
     if (user.role === ROLES.STUDENT && user.activeSessionId && payload.sid !== user.activeSessionId) {
