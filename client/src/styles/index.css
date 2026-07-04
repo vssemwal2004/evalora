@@ -1290,7 +1290,8 @@ textarea {
 .elvora-sequence {
   --elvora-progress: 0;
   position: relative;
-  height: 560vh;
+  z-index: 0;
+  height: 430vh;
   background: #f7f6f2;
 }
 
@@ -1318,8 +1319,6 @@ textarea {
   object-fit: cover;
   object-position: center;
   background: #f7f6f2;
-  backface-visibility: hidden;
-  transform: translateZ(0);
 }
 
 .elvora-sequence noscript img {
@@ -1409,6 +1408,22 @@ textarea {
   background: linear-gradient(180deg, transparent, rgba(247, 246, 242, 0.72));
 }
 
+.elvora-hero-overlap-panel {
+  margin-top: -100svh;
+  border-radius: clamp(1.4rem, 3vw, 2.75rem) clamp(1.4rem, 3vw, 2.75rem) 0 0;
+  box-shadow: 0 -34px 90px rgba(24, 24, 24, 0.12);
+}
+
+.elvora-hero-overlap-panel::before {
+  content: "";
+  position: absolute;
+  z-index: 1;
+  inset: 0 0 auto;
+  height: clamp(5rem, 12vh, 8rem);
+  pointer-events: none;
+  background: linear-gradient(180deg, rgba(252, 250, 247, 0.98), rgba(252, 250, 247, 0));
+}
+
 @media (max-width: 768px) {
   .elvora-header {
     padding: 0.85rem 1rem;
@@ -1420,7 +1435,7 @@ textarea {
   }
 
   .elvora-sequence {
-    height: 380vh;
+    height: 350vh;
   }
 
   .elvora-scroll-progress {

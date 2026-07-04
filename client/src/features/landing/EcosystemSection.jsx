@@ -788,7 +788,7 @@ export function EcosystemSection() {
       ref={sectionRef}
       style={{ '--elvora-nav-height': '72px' }}
       className={[
-        'relative isolate min-h-[620svh] overflow-clip bg-[#FCFAF7] text-[#181818] lg:min-h-[700svh]',
+        'elvora-hero-overlap-panel relative isolate min-h-[620svh] overflow-clip bg-[#FCFAF7] text-[#181818] lg:min-h-[700svh]',
         'bg-[radial-gradient(circle_at_50%_58%,rgba(243,107,22,0.08),transparent_30%),linear-gradient(rgba(24,24,24,0.04)_1px,transparent_1px),linear-gradient(90deg,rgba(24,24,24,0.04)_1px,transparent_1px)]',
         'bg-[size:auto,190px_190px,190px_190px] max-[900px]:min-h-[460svh] max-[900px]:bg-[size:auto,120px_120px,120px_120px]',
         'motion-reduce:min-h-0',

@@ -1,10 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 
 const FRAME_COUNT = 50;
-const INITIAL_BUFFER = 12;
+const INITIAL_BUFFER = 34;
+const EXIT_OVERLAP_VH = 100;
+const FRAME_SNAP_THRESHOLD = 0.045;
+const FRAME_EASE = 0.3;
+const MAX_FRAME_STEP = 0.72;
 const frameUrls = Array.from(
   { length: FRAME_COUNT },
-  (_, index) => `/assets/elvora-hero-sequence/frame-${String(index + 1).padStart(3, '0')}.webp`,
+  (_, index) => `/assets/elvora-hero-sequence/frame-${String(index + 1).padStart(3, '0')}.jpg`,
 );
 
 const clamp = (value, minimum, maximum) => Math.min(Math.max(value, minimum), maximum);
@@ -63,16 +67,17 @@ export function ElvoraSequence() {
       const scale = Math.max(viewportWidth / image.naturalWidth, viewportHeight / image.naturalHeight);
       const drawWidth = image.naturalWidth * scale;
       const drawHeight = image.naturalHeight * scale;
-      const drawX = (viewportWidth - drawWidth) / 2;
-      const drawY = (viewportHeight - drawHeight) / 2;
+      const drawX = Math.round((viewportWidth - drawWidth) / 2);
+      const drawY = Math.round((viewportHeight - drawHeight) / 2);
 
-      context.drawImage(image, drawX, drawY, drawWidth, drawHeight);
+      context.drawImage(image, drawX, drawY, Math.ceil(drawWidth), Math.ceil(drawHeight));
     };
 
-    const drawFrame = (requestedIndex) => {
-      const frameIndex = closestLoaded(clamp(requestedIndex, 0, FRAME_COUNT - 1));
+    const drawFrame = (position) => {
+      const frameIndex = closestLoaded(Math.round(clamp(position, 0, FRAME_COUNT - 1)));
       const image = loadedImages.get(frameIndex);
       if (!image || renderedFrameRef.current === frameIndex) return;
+
       context.imageSmoothingEnabled = true;
       context.imageSmoothingQuality = 'high';
       context.save();
@@ -88,12 +93,14 @@ export function ElvoraSequence() {
       const targetFrame = targetFrameRef.current;
       const currentFrame = displayedFrameRef.current;
       const distance = targetFrame - currentFrame;
-      const nextFrame = Math.abs(distance) < 0.035 ? targetFrame : currentFrame + distance * 0.24;
+      const easedStep = distance * FRAME_EASE;
+      const cappedStep = clamp(easedStep, -MAX_FRAME_STEP, MAX_FRAME_STEP);
+      const nextFrame = Math.abs(distance) < FRAME_SNAP_THRESHOLD ? targetFrame : currentFrame + cappedStep;
 
       displayedFrameRef.current = nextFrame;
-      drawFrame(Math.round(nextFrame));
+      drawFrame(nextFrame);
 
-      if (Math.abs(targetFrame - nextFrame) > 0.035) {
+      if (Math.abs(targetFrame - nextFrame) > FRAME_SNAP_THRESHOLD) {
         renderRafRef.current = window.requestAnimationFrame(render);
         return;
       }
@@ -121,7 +128,8 @@ export function ElvoraSequence() {
     };
 
     const syncProgressNow = () => {
-      const totalScrollableDistance = Math.max(1, section.offsetHeight - window.innerHeight);
+      const exitOverlap = window.innerHeight * (EXIT_OVERLAP_VH / 100);
+      const totalScrollableDistance = Math.max(1, section.offsetHeight - window.innerHeight - exitOverlap);
       const scrollTop = readScrollTop();
       const sectionTop = section.getBoundingClientRect().top + scrollTop;
       applyProgress((scrollTop - sectionTop) / totalScrollableDistance);
@@ -135,6 +143,7 @@ export function ElvoraSequence() {
       const request = new Promise((resolve) => {
         const image = new window.Image();
         image.decoding = 'async';
+        image.fetchPriority = index < INITIAL_BUFFER ? 'high' : 'low';
         image.onload = () => {
           pendingRequests.delete(index);
           if (!cancelled) {
@@ -159,7 +168,7 @@ export function ElvoraSequence() {
     const resizeCanvas = () => {
       const bounds = canvas.getBoundingClientRect();
       const mobile = bounds.width < 768;
-      const dpr = Math.min(window.devicePixelRatio || 1, mobile ? 1.5 : 2);
+      const dpr = Math.min(window.devicePixelRatio || 1, mobile ? 2 : 2.5);
       viewportWidth = Math.max(1, Math.round(bounds.width * dpr));
       viewportHeight = Math.max(1, Math.round(bounds.height * dpr));
 
@@ -174,8 +183,9 @@ export function ElvoraSequence() {
 
     const prioritize = (position) => {
       const target = Math.round(position);
-      [Math.floor(position), Math.ceil(position), target - 1, target + 1, target - 2, target + 2]
-        .forEach((index) => loadFrame(index));
+      const indexes = new Set([Math.floor(position), Math.ceil(position)]);
+      for (let distance = -10; distance <= 10; distance += 1) indexes.add(target + distance);
+      indexes.forEach((index) => loadFrame(index));
     };
 
     const loadSequence = async () => {
@@ -184,9 +194,15 @@ export function ElvoraSequence() {
       drawFrame(0);
       setLoadProgress(8);
 
-      const initialIndexes = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 24, FRAME_COUNT - 1];
-      for (let start = 0; start < initialIndexes.length; start += 4) {
-        const batch = initialIndexes.slice(start, start + 4);
+      const initialIndexes = [
+        1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
+        11, 12, 13, 14, 15, 16, 17, 18,
+        19, 20, 21, 22, 23, 24, 25, 26,
+        27, 28, 29, 30, 31, 32, 33,
+        FRAME_COUNT - 1,
+      ];
+      for (let start = 0; start < initialIndexes.length; start += 7) {
+        const batch = initialIndexes.slice(start, start + 7);
         await Promise.all(batch.map(loadFrame));
         if (cancelled) return;
         setLoadProgress(Math.min(100, Math.round(((start + batch.length + 1) / (INITIAL_BUFFER + 1)) * 100)));
@@ -195,10 +211,10 @@ export function ElvoraSequence() {
 
       const remaining = Array.from({ length: FRAME_COUNT }, (_, index) => index)
         .filter((index) => !loadedImages.has(index));
-      for (let start = 0; start < remaining.length && !cancelled; start += 8) {
-        await Promise.all(remaining.slice(start, start + 8).map(loadFrame));
+      for (let start = 0; start < remaining.length && !cancelled; start += 10) {
+        await Promise.all(remaining.slice(start, start + 10).map(loadFrame));
         await new Promise((resolve) => {
-          backgroundTimer = window.setTimeout(resolve, 40);
+          backgroundTimer = window.setTimeout(resolve, 16);
         });
       }
     };
@@ -276,7 +292,7 @@ export function ElvoraSequence() {
         <div className="elvora-sequence-fade" aria-hidden="true" />
 
         <noscript>
-          <img src="/assets/elvora-hero-sequence/frame-001.webp" alt="Elvora AI proctoring platform" />
+          <img src="/assets/elvora-hero-sequence/frame-001.jpg" alt="Elvora AI proctoring platform" />
         </noscript>
       </div>
     </section>
