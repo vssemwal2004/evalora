@@ -142,4 +142,12 @@ module.exports = {
     pass: process.env.SMTP_PASS,
     from: process.env.SMTP_FROM,
   },
+  r2: {
+    accountId: process.env.R2_ACCOUNT_ID || '',
+    bucket: process.env.R2_BUCKET || '',
+    accessKeyId: process.env.R2_ACCESS_KEY_ID || '',
+    secretAccessKey: process.env.R2_SECRET_ACCESS_KEY || '',
+    publicUrl: process.env.R2_PUBLIC_URL || '',
+    presignExpiresSeconds: Number(process.env.R2_PRESIGN_EXPIRES_SECONDS || 600),
+  },
 };

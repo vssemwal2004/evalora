@@ -12,6 +12,7 @@ import {
   FileSpreadsheet,
   Filter,
   GraduationCap,
+  IdCard,
   LayoutDashboard,
   Layers3,
   RotateCcw,
@@ -59,6 +60,8 @@ const exportFields = [
   ['maxMarks', 'Max Marks'],
   ['percentage', 'Percentage'],
   ['securityScore', 'Security Score'],
+  ['identityMatch', 'Identity Match'],
+  ['identityStatus', 'Identity Status'],
   ['warningEvents', 'Warnings'],
   ['criticalEvents', 'Critical Events'],
   ['integrity', 'Integrity'],
@@ -88,6 +91,10 @@ function canExport(user) {
   return user?.role === 'super_admin' || user?.permissions?.includes('reports.export');
 }
 
+function canReviewUfm(user) {
+  return user?.role === 'super_admin' || user?.permissions?.includes('ufm.reverse');
+}
+
 function buildReportSchema(selectedColumns) {
   const definitions = {
     assessment: { cell: (row) => ({ type: String, value: row.assessment || '' }) },
@@ -110,6 +117,8 @@ function buildReportSchema(selectedColumns) {
     maxMarks: { cell: (row) => ({ type: Number, value: row.maxMarks || 0 }) },
     percentage: { cell: (row) => ({ type: Number, value: row.percentage || 0 }) },
     securityScore: { cell: (row) => ({ type: Number, value: row.securityScore || 0 }) },
+    identityMatch: { cell: (row) => ({ type: Number, value: row.identityMatch || row.identityVerification?.matchPercentage || 0 }) },
+    identityStatus: { cell: (row) => ({ type: String, value: row.identityStatus || row.identityVerification?.status || '' }) },
     warningEvents: { cell: (row) => ({ type: Number, value: row.warningEvents || 0 }) },
     criticalEvents: { cell: (row) => ({ type: Number, value: row.criticalEvents || 0 }) },
     integrity: { cell: (row) => ({ type: String, value: row.integrity || '' }) },
@@ -363,9 +372,10 @@ function CandidateTable({
   );
 }
 
-function CandidateDrawer({ detail, activeTab, onTab, onClose, onViolations }) {
+function CandidateDrawer({ detail, activeTab, onTab, onClose, onViolations, onUfmDecision, canDecideUfm }) {
   const candidate = detail?.candidate;
   const assessment = detail?.assessment;
+  const identity = candidate?.identityVerification || {};
   if (!candidate) return null;
 
   return (
@@ -475,10 +485,57 @@ function CandidateDrawer({ detail, activeTab, onTab, onClose, onViolations }) {
             <div className="space-y-5">
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
                 <KpiCard label="Security Score" value={candidate.securityScore} icon={ShieldAlert} tone={candidate.integrityStatus === 'flagged' ? 'rose' : 'green'} />
+                <KpiCard label="ID Match" value={identity.matchPercentage === undefined ? '-' : `${Number(identity.matchPercentage || 0).toFixed(1)}%`} icon={IdCard} tone={identity.status === 'manual_review' ? 'rose' : 'green'} />
                 <KpiCard label="Warnings" value={candidate.warningEvents} icon={Activity} />
                 <KpiCard label="Critical" value={candidate.criticalEvents} icon={ShieldAlert} tone="rose" />
                 <KpiCard label="Events" value={candidate.totalSecurityEvents} icon={Layers3} />
               </div>
+              <ReportPanel title="Identity Verification" caption="Selfie versus physical identity card face match" icon={IdCard}>
+                {identity.status && identity.status !== 'not_started' ? (
+                  <div className="space-y-4">
+                    <div className="grid grid-cols-2 gap-3 text-xs sm:grid-cols-4">
+                      {[
+                        ['Status', formatType(identity.status)],
+                        ['Match', `${Number(identity.matchPercentage || 0).toFixed(1)}%`],
+                        ['Distance', identity.distance === null || identity.distance === undefined ? '-' : Number(identity.distance).toFixed(3)],
+                        ['Captured', formatDate(identity.capturedAt)],
+                      ].map(([label, value]) => (
+                        <div className="rounded-xl border border-slate-200 bg-slate-50 p-3" key={label}>
+                          <p className="font-bold capitalize text-slate-900">{value}</p>
+                          <p className="mt-1 text-[10px] font-semibold text-slate-400">{label}</p>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      {[
+                        ['Live face capture', identity.selfieImage],
+                        ['Identity card capture', identity.idCardImage],
+                      ].map(([label, image]) => (
+                        <div className="overflow-hidden rounded-xl border border-slate-200 bg-slate-50" key={label}>
+                          <div className="aspect-video bg-slate-100">
+                            {image ? <img src={image} alt={label} className="h-full w-full object-cover" /> : null}
+                          </div>
+                          <p className="px-3 py-2 text-[11px] font-bold text-slate-600">{label}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <EmptyState title="No identity capture" description="The student has not submitted identity verification evidence." />
+                )}
+              </ReportPanel>
+              {canDecideUfm && (candidate.ufmReviews?.length > 0 || identity.status === 'manual_review' || candidate.integrityStatus === 'flagged') ? (
+                <ReportPanel title="Final Integrity Decision" caption="Only admin or super admin can close this review" icon={ShieldAlert}>
+                  <div className="flex flex-wrap gap-2">
+                    <button className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-bold text-rose-700 hover:bg-rose-100" type="button" onClick={() => onUfmDecision(candidate, 'ufm')}>
+                      Confirm UFM
+                    </button>
+                    <button className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-700 hover:bg-emerald-100" type="button" onClick={() => onUfmDecision(candidate, 'clear')}>
+                      Clear review
+                    </button>
+                  </div>
+                </ReportPanel>
+              ) : null}
               <ReportPanel title="Security Timeline" caption="Captured monitoring events" icon={ShieldAlert}>
                 <div className="space-y-3">
                   {candidate.securityEvents.length === 0 ? (
@@ -492,6 +549,21 @@ function CandidateDrawer({ detail, activeTab, onTab, onClose, onViolations }) {
                         </div>
                         <p className="mt-2 text-xs font-bold capitalize text-slate-900">{formatType(event.type)}</p>
                         <p className="mt-1 text-xs leading-5 text-slate-500">{event.message || 'Security event recorded.'}</p>
+                        {event.metadata?.evidence?.snapshotUrl ? (
+                          <img
+                            src={event.metadata.evidence.snapshotUrl}
+                            alt={`${formatType(event.type)} evidence`}
+                            className="mt-3 aspect-video w-full rounded-lg border border-slate-200 object-cover"
+                          />
+                        ) : null}
+                        {event.metadata?.evidence?.recordingUrl ? (
+                          <video
+                            src={event.metadata.evidence.recordingUrl}
+                            className="mt-3 aspect-video w-full rounded-lg border border-slate-200 bg-slate-950"
+                            controls
+                            preload="metadata"
+                          />
+                        ) : null}
                       </div>
                     ))
                   )}
@@ -510,6 +582,7 @@ function ViolationModal({ detail, onClose }) {
   if (!candidate) return null;
 
   const summary = candidate.securitySummary || {};
+  const identity = candidate.identityVerification || {};
   const securityTiles = [
     ['Total Warnings', candidate.warningEvents || 0],
     ['Tab Switches', summary.tabSwitchCount || 0],
@@ -556,6 +629,8 @@ function ViolationModal({ detail, onClose }) {
                   ['Microphone issues', summary.microphoneIssueCount || 0],
                   ['No-face events', summary.noFaceCount || 0],
                   ['Multiple-face events', summary.multipleFaceCount || 0],
+                  ['Identity match', identity.status && identity.status !== 'not_started' ? `${Number(identity.matchPercentage || 0).toFixed(1)}%` : '-'],
+                  ['Identity status', identity.status ? formatType(identity.status) : '-'],
                 ].map(([label, value]) => (
                   <div className="flex items-center justify-between gap-3 border-b border-slate-100 pb-2" key={label}>
                     <dt className="text-slate-500">{label}</dt>
@@ -580,6 +655,21 @@ function ViolationModal({ detail, onClose }) {
                         <span className="text-[10px] font-semibold text-slate-400">{formatDate(event.occurredAt)}</span>
                       </div>
                       <p className="mt-2 text-xs leading-5 text-slate-500">{event.message || 'Security event recorded.'}</p>
+                      {event.metadata?.evidence?.snapshotUrl ? (
+                        <img
+                          src={event.metadata.evidence.snapshotUrl}
+                          alt={`${formatType(event.type)} evidence`}
+                          className="mt-3 aspect-video w-full rounded-lg border border-slate-200 object-cover"
+                        />
+                      ) : null}
+                      {event.metadata?.evidence?.recordingUrl ? (
+                        <video
+                          src={event.metadata.evidence.recordingUrl}
+                          className="mt-3 aspect-video w-full rounded-lg border border-slate-200 bg-slate-950"
+                          controls
+                          preload="metadata"
+                        />
+                      ) : null}
                     </article>
                   ))
                 )}
@@ -662,6 +752,7 @@ export function AssessmentReportsPage() {
   const [error, setError] = useState('');
 
   const exportAllowed = canExport(user);
+  const ufmReviewAllowed = canReviewUfm(user);
 
   const loadAssessments = useCallback(async () => {
     setIsLoadingIndex(true);
@@ -728,6 +819,24 @@ export function AssessmentReportsPage() {
       }
     } catch (requestError) {
       setError(requestError.response?.data?.message || 'Unable to open candidate report.');
+    }
+  }
+
+  async function decideUfm(candidate, decision) {
+    if (!selectedAssessmentId || !candidate?.assignmentId || !ufmReviewAllowed) return;
+    const note = window.prompt(decision === 'ufm' ? 'Enter final UFM reason' : 'Enter clear-review note') || '';
+    if (!note.trim()) return;
+
+    setError('');
+    try {
+      await api.post(`/reports/assessments/${selectedAssessmentId}/candidates/${candidate.assignmentId}/ufm-review`, {
+        decision,
+        note,
+      });
+      await loadReport();
+      await loadCandidate(candidate);
+    } catch (requestError) {
+      setError(requestError.response?.data?.message || 'Unable to save UFM review decision.');
     }
   }
 
@@ -1101,6 +1210,8 @@ export function AssessmentReportsPage() {
           setViolationDetail(detail);
           setDetail(null);
         }}
+        onUfmDecision={decideUfm}
+        canDecideUfm={ufmReviewAllowed}
       />
       <ViolationModal detail={violationDetail} onClose={() => setViolationDetail(null)} />
       <ExportModal

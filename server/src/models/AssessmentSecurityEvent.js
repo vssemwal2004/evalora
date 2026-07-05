@@ -49,6 +49,8 @@ const assessmentSecurityEventSchema = new mongoose.Schema(
         'screenshot_attempt',
         'duplicate_tab',
         'idle_detected',
+        'identity_verification',
+        'exam_recording',
         'noise_detected',
         'ufm_pending',
         'heartbeat',

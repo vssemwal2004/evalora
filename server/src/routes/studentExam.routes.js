@@ -22,9 +22,26 @@ const optionalObjectIdString = z.preprocess(
   objectIdString.optional()
 );
 const setupStepBodySchema = z.object({
-  key: z.enum(['verify', 'instructions', 'browser', 'camera', 'microphone', 'fullscreen', 'final']),
+  key: z.enum(['verify', 'instructions', 'browser', 'camera', 'identity', 'microphone', 'fullscreen', 'final']),
   status: z.enum(['passed', 'failed']).optional(),
   message: z.string().trim().max(500).optional().default(''),
+});
+const evidenceImageSchema = z.string().trim().max(1000_000).refine(
+  (value) => /^data:image\/(jpeg|jpg|png|webp);base64,[A-Za-z0-9+/=]+$/.test(value) || /^https:\/\/.+/i.test(value),
+  'Invalid image evidence payload.'
+);
+const descriptorSchema = z.array(z.coerce.number()).min(64).max(512);
+const identityVerificationBodySchema = z.object({
+  selfieImage: evidenceImageSchema,
+  idCardImage: evidenceImageSchema,
+  selfieStorageKey: z.string().trim().max(500).optional().default(''),
+  idCardStorageKey: z.string().trim().max(500).optional().default(''),
+  selfieDescriptor: descriptorSchema,
+  idCardDescriptor: descriptorSchema,
+  matchPercentage: z.coerce.number().min(0).max(100),
+  distance: z.coerce.number().min(0).max(2).optional(),
+  threshold: z.coerce.number().min(0.1).max(1.5).optional().default(0.6),
+  status: z.enum(['passed', 'failed', 'manual_review']).optional().default('manual_review'),
 });
 const answerBodySchema = z.object({
   questionId: objectIdString,
@@ -101,6 +118,7 @@ function getRequiredSetupSteps(assessment) {
   const steps = ['verify', 'instructions', 'browser'];
 
   if (settings.cameraRequired || settings.cameraMonitoring || settings.proctoringEnabled) steps.push('camera');
+  if (settings.identityVerificationRequired !== false) steps.push('identity');
   if (settings.microphoneRequired || settings.noiseMonitoring || settings.proctoringEnabled) steps.push('microphone');
   if (settings.fullscreenEnabled || settings.requireFullscreenBeforeStart) steps.push('fullscreen');
 
@@ -147,6 +165,15 @@ function serializeExam({ assignment, assessment, attempt, questionSummary }) {
           submittedAt: attempt.submittedAt,
           securityScore: attempt.securityScore || 0,
           securitySummary: attempt.securitySummary,
+          identityVerification: attempt.identityVerification
+            ? {
+                status: attempt.identityVerification.status,
+                matchPercentage: attempt.identityVerification.matchPercentage,
+                distance: attempt.identityVerification.distance,
+                threshold: attempt.identityVerification.threshold,
+                capturedAt: attempt.identityVerification.capturedAt,
+              }
+            : null,
           securityHold:
             attempt.securityHold?.active && SECURITY_HOLD_TYPES.includes(attempt.securityHold.triggerType)
               ? attempt.securityHold
@@ -171,6 +198,13 @@ function serializeProctorStudentUpdate({ assignment, attempt, alertCount = 0 }) 
     attemptStatus: attempt?.status || 'not_started',
     lastHeartbeatAt: attempt?.lastHeartbeatAt,
     securityScore: attempt?.securityScore || 0,
+    identityVerification: attempt?.identityVerification
+      ? {
+          status: attempt.identityVerification.status,
+          matchPercentage: attempt.identityVerification.matchPercentage,
+          capturedAt: attempt.identityVerification.capturedAt,
+        }
+      : null,
     alertCount,
   };
 }
@@ -379,6 +413,10 @@ function applySecuritySummary(attempt, type, severity = 'warning') {
     attempt.securitySummary.cameraIssueCount = Number(attempt.securitySummary.cameraIssueCount || 0) + 1;
   }
 
+  if (type === 'identity_verification') {
+    attempt.securitySummary.aiAlertCount = Number(attempt.securitySummary.aiAlertCount || 0) + 1;
+  }
+
   if (type === 'microphone_missing' || type === 'noise_detected') {
     attempt.securitySummary.microphoneIssueCount = Number(attempt.securitySummary.microphoneIssueCount || 0) + 1;
   }
@@ -534,6 +572,73 @@ router.post('/exams/:assignmentId/setup-step', examActionLimiter, validateBody(s
     await attempt.save();
 
     return res.json({ attempt });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.post('/exams/:assignmentId/identity-verification', examActionLimiter, validateBody(identityVerificationBodySchema), async (req, res, next) => {
+  try {
+    const found = await findStudentExam(req, req.params.assignmentId);
+    if (!found) return res.status(404).json({ message: 'Assigned exam not found.' });
+
+    const { assessment, assignment } = found;
+    const attempt = await getOrCreateAttempt(assessment, assignment);
+    const status = req.body.status || 'manual_review';
+    const message =
+      status === 'passed'
+        ? `Identity verification passed with ${Number(req.body.matchPercentage).toFixed(1)}% face match.`
+        : `Identity verification needs review with ${Number(req.body.matchPercentage).toFixed(1)}% face match.`;
+
+    attempt.identityVerification = {
+      status,
+      matchPercentage: Number(req.body.matchPercentage || 0),
+      distance: req.body.distance === undefined ? null : Number(req.body.distance),
+      threshold: Number(req.body.threshold || 0.6),
+      selfieImage: req.body.selfieImage,
+      idCardImage: req.body.idCardImage,
+      selfieStorageKey: req.body.selfieStorageKey,
+      idCardStorageKey: req.body.idCardStorageKey,
+      selfieDescriptor: req.body.selfieDescriptor,
+      idCardDescriptor: req.body.idCardDescriptor,
+      capturedAt: new Date(),
+    };
+    upsertSetupStep(attempt, 'identity', 'passed', message);
+
+    const event = await AssessmentSecurityEvent.create({
+      assessmentId: assessment._id,
+      attemptId: attempt._id,
+      assessmentStudentId: assignment._id,
+      ownerAdminId: assessment.ownerAdminId,
+      type: 'identity_verification',
+      severity: status === 'passed' ? 'info' : 'warning',
+      score: status === 'passed' ? 0 : 3,
+      message,
+      metadata: {
+        status,
+        matchPercentage: Number(req.body.matchPercentage || 0),
+        distance: req.body.distance === undefined ? null : Number(req.body.distance),
+        threshold: Number(req.body.threshold || 0.6),
+      },
+      occurredAt: new Date(),
+    });
+
+    applySecuritySummary(attempt, 'identity_verification', event.severity);
+    attempt.securityScore = Number(attempt.securityScore || 0) + Number(event.score || 0);
+    await attempt.save();
+    await emitProctorStudentUpdate(req, { assessment, assignment, attempt, event });
+
+    return res.status(201).json({
+      attempt,
+      identityVerification: {
+        status: attempt.identityVerification.status,
+        matchPercentage: attempt.identityVerification.matchPercentage,
+        distance: attempt.identityVerification.distance,
+        threshold: attempt.identityVerification.threshold,
+        capturedAt: attempt.identityVerification.capturedAt,
+      },
+      event,
+    });
   } catch (error) {
     return next(error);
   }

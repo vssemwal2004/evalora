@@ -35,7 +35,7 @@ const settingGroups = [
   {
     title: 'AI Proctoring',
     icon: Eye,
-    keys: ['aiProctoringEnabled', 'detectNoFace', 'detectMultipleFaces', 'detectMultiplePersons', 'detectMobilePhone', 'detectLookingAway', 'detectCameraBlocked', 'detectionIntervalMs', 'confidenceThreshold', 'violationCooldownSeconds'],
+    keys: ['aiProctoringEnabled', 'detectNoFace', 'detectMultipleFaces', 'detectMultiplePersons', 'detectMobilePhone', 'detectLookingAway', 'detectCameraBlocked', 'identityVerificationRequired', 'detectionIntervalMs', 'confidenceThreshold', 'violationCooldownSeconds'],
   },
   {
     title: 'Watermark, Enforcement, Reminders',
