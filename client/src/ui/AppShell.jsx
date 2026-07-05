@@ -17,6 +17,7 @@ import {
   Shield,
   Settings as SettingsIcon,
   UserPlus,
+  UserCheck,
   UserRoundCog,
   Users,
   Video,
@@ -43,9 +44,17 @@ const navByRole = {
         children: [
           { label: 'Overall', to: '/super-admin/assessments', icon: NotebookTabs },
           { label: 'Create Assessment', to: '/super-admin/assessments/create', icon: FilePlus2 },
-          { label: 'Assessment Reports', to: '/super-admin/assessments/reports', icon: BarChart3 },
           { label: 'My Assessments', to: '/super-admin/assessments/my', icon: ClipboardList },
           { label: 'Review Assessments', to: '/super-admin/assessments/review', icon: ListChecks },
+        ],
+      },
+      {
+        id: 'exam-reports',
+        label: 'Exam Report',
+        icon: BarChart3,
+        children: [
+          { label: 'Exam', to: '/super-admin/assessments/reports/exam', icon: BarChart3 },
+          { label: 'Attendance Report', to: '/super-admin/assessments/reports/attendance', icon: UserCheck },
         ],
       },
       {
@@ -121,9 +130,17 @@ const navByRole = {
         children: [
           { label: 'Overall', to: '/admin/assessments', icon: NotebookTabs, permission: 'assessment.view' },
           { label: 'Create Assessment', to: '/admin/assessments/create', icon: FilePlus2, permission: 'assessment.create' },
-          { label: 'Assessment Reports', to: '/admin/assessments/reports', icon: BarChart3, permission: 'reports.view' },
           { label: 'My Assessments', to: '/admin/assessments/my', icon: ClipboardList, permission: 'assessment.view' },
           { label: 'Review Assessments', to: '/admin/assessments/review', icon: ListChecks, permission: 'assessment.view' },
+        ],
+      },
+      {
+        id: 'exam-reports',
+        label: 'Exam Report',
+        icon: BarChart3,
+        children: [
+          { label: 'Exam', to: '/admin/assessments/reports/exam', icon: BarChart3, permission: 'reports.view' },
+          { label: 'Attendance Report', to: '/admin/assessments/reports/attendance', icon: UserCheck, anyPermissions: ['reports.attendance.view', 'reports.view'] },
         ],
       },
       {

@@ -22,7 +22,7 @@ const ManageAdminsPage = lazyPage(() => import('./features/super-admin/ManageAdm
 const CreateAdminPage = lazyPage(() => import('./features/super-admin/ManageAdminsPage.jsx'), 'CreateAdminPage');
 const ViewAdminsPage = lazyPage(() => import('./features/super-admin/ManageAdminsPage.jsx'), 'ViewAdminsPage');
 const AssessmentOverviewPage = lazyPage(() => import('./features/assessments/AssessmentOverviewPage.jsx'), 'AssessmentOverviewPage');
-const AssessmentReportsPage = lazyPage(() => import('./features/assessments/AssessmentReportsPage.jsx'), 'AssessmentReportsPage');
+const ExamReportsPage = lazyPage(() => import('./features/assessments/ExamReportsPage.jsx'), 'ExamReportsPage');
 const MyAssessmentsPage = lazyPage(() => import('./features/assessments/MyAssessmentsPage.jsx'), 'MyAssessmentsPage');
 const ReviewAssessmentsPage = lazyPage(() => import('./features/assessments/ReviewAssessmentsPage.jsx'), 'ReviewAssessmentsPage');
 const ReviewQuestionMappingPage = lazyPage(() => import('./features/assessments/ReviewQuestionMappingPage.jsx'), 'ReviewQuestionMappingPage');
@@ -109,7 +109,15 @@ export const router = createBrowserRouter([
           },
           {
             path: 'assessments/reports',
-            element: page(AssessmentReportsPage),
+            element: page(ExamReportsPage, { reportMode: 'home' }),
+          },
+          {
+            path: 'assessments/reports/exam',
+            element: page(ExamReportsPage, { reportMode: 'exam' }),
+          },
+          {
+            path: 'assessments/reports/attendance',
+            element: page(ExamReportsPage, { reportMode: 'attendance' }),
           },
           {
             path: 'assessments/my',
@@ -224,7 +232,15 @@ export const router = createBrowserRouter([
           },
           {
             path: 'assessments/reports',
-            element: page(AssessmentReportsPage),
+            element: page(ExamReportsPage, { reportMode: 'home' }),
+          },
+          {
+            path: 'assessments/reports/exam',
+            element: page(ExamReportsPage, { reportMode: 'exam' }),
+          },
+          {
+            path: 'assessments/reports/attendance',
+            element: page(ExamReportsPage, { reportMode: 'attendance' }),
           },
           {
             path: 'assessments/my',

@@ -890,7 +890,7 @@ export function AssessmentReportsPage() {
               <BarChart3 size={19} />
             </span>
             <div className="min-w-0">
-              <h1 className="text-lg font-semibold text-slate-950">Assessment Reports</h1>
+              <h1 className="text-lg font-semibold text-slate-950">Exam Reports</h1>
               <p className="truncate text-xs text-slate-500">
                 {report?.pagination?.total || 0} candidate records across {assessments.length} assessments
               </p>

@@ -406,9 +406,9 @@ const pageCopy = {
     showCreate: true,
   },
   reports: {
-    eyebrow: 'Assessment Reports',
-    title: 'Assessment Reports',
-    description: 'Review assessment-level reporting readiness, student/proctor counts, and operational status.',
+    eyebrow: 'Exam Report',
+    title: 'Exam Report',
+    description: 'Review exam-level reporting readiness, student/proctor counts, and operational status.',
     showCreate: false,
   },
   mine: {

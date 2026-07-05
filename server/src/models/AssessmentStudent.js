@@ -107,6 +107,8 @@ const assessmentStudentSchema = new mongoose.Schema(
 assessmentStudentSchema.index({ assessmentId: 1, email: 1 }, { unique: true });
 assessmentStudentSchema.index({ assessmentId: 1, courseName: 1 });
 assessmentStudentSchema.index({ assessmentId: 1, examStatus: 1 });
+assessmentStudentSchema.index({ assessmentId: 1, courseName: 1, name: 1, _id: 1 });
+assessmentStudentSchema.index({ assessmentId: 1, examStatus: 1, courseName: 1, name: 1, _id: 1 });
 assessmentStudentSchema.index({ ownerAdminId: 1, examStatus: 1, createdAt: -1 });
 assessmentStudentSchema.index({ assignedProctorId: 1, examStatus: 1 });
 assessmentStudentSchema.index({ assessmentId: 1, assignedProctorId: 1, examStatus: 1 });

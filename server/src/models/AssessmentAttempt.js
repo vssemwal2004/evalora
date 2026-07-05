@@ -102,6 +102,23 @@ const assessmentAttemptSchema = new mongoose.Schema(
       default: 0,
       min: 0,
     },
+    scoreSummary: {
+      processedAt: Date,
+      processedBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+      },
+      totalQuestions: { type: Number, default: 0 },
+      answered: { type: Number, default: 0 },
+      correct: { type: Number, default: 0 },
+      wrong: { type: Number, default: 0 },
+      skipped: { type: Number, default: 0 },
+      pending: { type: Number, default: 0 },
+      markedForReview: { type: Number, default: 0 },
+      score: { type: Number, default: 0 },
+      maxMarks: { type: Number, default: 0 },
+      percentage: { type: Number, default: 0 },
+    },
     securityHold: {
       active: { type: Boolean, default: false },
       phase: { type: String, enum: ['none', 'grace', 'recheck', 'expired'], default: 'none' },
@@ -121,5 +138,9 @@ assessmentAttemptSchema.index({ assessmentId: 1, status: 1, lastHeartbeatAt: -1 
 assessmentAttemptSchema.index({ ownerAdminId: 1, status: 1, updatedAt: -1 });
 assessmentAttemptSchema.index({ assessmentId: 1, assessmentStudentId: 1, status: 1 });
 assessmentAttemptSchema.index({ assessmentId: 1, lastHeartbeatAt: -1 });
+assessmentAttemptSchema.index({ assessmentId: 1, submittedAt: -1 });
+assessmentAttemptSchema.index({ assessmentId: 1, status: 1, submittedAt: -1 });
+assessmentAttemptSchema.index({ assessmentId: 1, 'scoreSummary.score': 1 });
+assessmentAttemptSchema.index({ assessmentId: 1, 'identityVerification.status': 1, securityScore: -1 });
 
 module.exports = mongoose.model('AssessmentAttempt', assessmentAttemptSchema);

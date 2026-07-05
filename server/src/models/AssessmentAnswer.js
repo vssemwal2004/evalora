@@ -58,5 +58,9 @@ const assessmentAnswerSchema = new mongoose.Schema(
 assessmentAnswerSchema.index({ attemptId: 1, questionId: 1 }, { unique: true });
 assessmentAnswerSchema.index({ assessmentId: 1, assessmentStudentId: 1 });
 assessmentAnswerSchema.index({ assessmentId: 1, attemptId: 1 });
+assessmentAnswerSchema.index({ assessmentId: 1, questionId: 1, answered: 1 });
+assessmentAnswerSchema.index({ assessmentId: 1, savedAt: -1 });
+assessmentAnswerSchema.index({ assessmentId: 1, answered: 1 });
+assessmentAnswerSchema.index({ assessmentId: 1, markedForReview: 1 });
 
 module.exports = mongoose.model('AssessmentAnswer', assessmentAnswerSchema);
