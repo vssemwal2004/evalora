@@ -6,6 +6,7 @@ gsap.registerPlugin(ScrollTrigger);
 
 const FRAME_COUNT = 44;
 const DESKTOP_SEQUENCE_SCROLL_VH = 1.2;
+const DESKTOP_HANDOFF_SCROLL_VH = 1;
 const CRITICAL_FRAME_INDEXES = [0, 10, 21, 32, 43];
 const DESKTOP_FRAME_BATCH_SIZE = 3;
 const MOBILE_FRAME_BATCH_SIZE = 2;
@@ -106,6 +107,7 @@ function drawContain(context, image, width, height) {
 export function ElvoraSequence() {
   const sectionRef = useRef(null);
   const canvasRef = useRef(null);
+  const heroStageRef = useRef(null);
   const imageWrapRef = useRef(null);
   const progressRef = useRef(null);
   const statusCardRef = useRef(null);
@@ -389,6 +391,8 @@ export function ElvoraSequence() {
         let lenisRafId = 0;
         let lenis;
         let disposed = false;
+        const sequenceScroll = () => Math.round(window.innerHeight * DESKTOP_SEQUENCE_SCROLL_VH);
+        const handoffScroll = () => Math.round(window.innerHeight * DESKTOP_HANDOFF_SCROLL_VH);
         const raf = (time) => {
           if (!lenis || disposed) return;
           lenis.raf(time);
@@ -398,10 +402,11 @@ export function ElvoraSequence() {
         import('lenis').then(({ default: Lenis }) => {
           if (disposed) return;
           lenis = new Lenis({
-            duration: 1.12,
-            lerp: 0.09,
+            lerp: 0.075,
             smoothWheel: true,
-            wheelMultiplier: 0.9,
+            wheelMultiplier: 0.82,
+            touchMultiplier: 1,
+            syncTouch: false,
           });
           lenis.on('scroll', ScrollTrigger.update);
           lenisRafId = window.requestAnimationFrame(raf);
@@ -411,8 +416,8 @@ export function ElvoraSequence() {
           scrollTrigger: {
             trigger: section,
             start: 'top top',
-            end: () => `+=${Math.round(window.innerHeight * DESKTOP_SEQUENCE_SCROLL_VH)}`,
-            scrub: 1.15,
+            end: () => `+=${sequenceScroll()}`,
+            scrub: 0.95,
             invalidateOnRefresh: true,
             onUpdate: ({ progress }) => applyProgress(progress),
           },
@@ -466,6 +471,22 @@ export function ElvoraSequence() {
             ease: 'none',
           }, 0);
 
+        gsap.timeline({
+          defaults: { ease: 'none' },
+          scrollTrigger: {
+            trigger: section,
+            start: () => `top+=${sequenceScroll()} top`,
+            end: () => `+=${handoffScroll()}`,
+            scrub: 0.9,
+            invalidateOnRefresh: true,
+          },
+        }).to(heroStageRef.current, {
+          y: () => -Math.round(window.innerHeight * 0.07),
+          scale: 0.982,
+          opacity: 0.42,
+          force3D: true,
+        }, 0);
+
         return () => {
           disposed = true;
           window.cancelAnimationFrame(lenisRafId);
@@ -500,7 +521,7 @@ export function ElvoraSequence() {
     <section
       ref={sectionRef}
       id="elvora-hero"
-      className="relative isolate min-h-screen overflow-x-clip bg-white lg:h-[320vh]"
+      className="relative isolate min-h-screen overflow-x-clip bg-white lg:h-[320svh]"
       aria-labelledby="elvora-title"
       style={{ '--mx': '28%', '--my': '45%', '--liquid-active': '0', '--wave-shift': '0px', '--wave-shift-neg': '0px', '--wave-shift-soft': '0px' }}
     >
@@ -799,7 +820,7 @@ export function ElvoraSequence() {
           }
         `}
       </style>
-      <div className="relative flex min-h-screen items-center bg-white pb-16 pt-28 lg:sticky lg:top-0 lg:h-screen lg:pb-0 lg:pt-24">
+      <div ref={heroStageRef} className="relative flex min-h-screen items-center bg-white pb-16 pt-28 will-change-[opacity,transform] lg:sticky lg:top-0 lg:h-screen lg:pb-0 lg:pt-24">
         <div
           ref={liquidFieldRef}
           className="hero-liquid-bg"

@@ -196,12 +196,14 @@ export function LandingPage() {
         style={{
           '--header-mouse-x': '50%',
           '--header-mouse-y': '50%',
-          backgroundImage: 'radial-gradient(circle at var(--header-mouse-x) var(--header-mouse-y), rgba(255,122,0,0.105), transparent 34%), linear-gradient(180deg, rgba(255,255,255,0.88), rgba(255,255,255,0.68))',
+          backgroundImage: isHeaderScrolled
+            ? 'radial-gradient(circle at var(--header-mouse-x) var(--header-mouse-y), rgba(255,122,0,0.09), transparent 34%), linear-gradient(180deg, rgba(255,255,255,0.46), rgba(255,255,255,0.22))'
+            : 'radial-gradient(circle at var(--header-mouse-x) var(--header-mouse-y), rgba(255,122,0,0.065), transparent 34%), linear-gradient(180deg, rgba(255,255,255,0.16), rgba(255,255,255,0.04))',
         }}
         className={`landing-header fixed inset-x-0 top-0 z-[70] flex h-[84px] items-center transition-all duration-300 md:h-24 ${
           isHeaderScrolled
-            ? 'border-b border-orange-200/50 shadow-[0_18px_48px_rgba(255,122,0,0.10)] backdrop-blur-2xl'
-            : 'border-b border-orange-100/35 shadow-none backdrop-blur-xl'
+            ? 'border-b border-orange-200/35 shadow-[0_18px_48px_rgba(255,122,0,0.08)] backdrop-blur-xl'
+            : 'border-b border-transparent shadow-none backdrop-blur-[10px]'
         }`}
       >
         <div className="mx-auto flex w-full max-w-[1360px] items-center justify-between px-5 sm:px-8 xl:px-10">
