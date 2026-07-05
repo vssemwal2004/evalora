@@ -60,6 +60,29 @@ const stackWidthClass = [
   'max-[900px]:w-[clamp(220px,62vw,300px)] max-[420px]:w-[clamp(205px,58vw,260px)]',
 ].join(' ');
 
+const connectorSignalPulseEnabled = false;
+
+const networkPaths = [
+  'M 32 110 C 96 58 150 94 210 54 S 318 54 382 96',
+  'M 26 236 C 92 198 146 226 206 180 S 300 138 394 178',
+  'M 74 390 C 134 308 208 338 254 266 S 328 210 400 248',
+  'M 44 112 L 102 214 L 198 182 L 270 298 L 368 246',
+  'M 106 424 L 186 336 L 282 384 L 354 300',
+];
+
+const networkNodes = [
+  [44, 112, 2.8, 3.8],
+  [102, 214, 3.2, 4.2],
+  [198, 182, 2.8, 3.6],
+  [270, 298, 3.1, 4.5],
+  [368, 246, 2.6, 3.9],
+  [106, 424, 3, 4.1],
+  [186, 336, 2.7, 3.7],
+  [282, 384, 2.9, 4.4],
+  [354, 300, 3.2, 4],
+  [382, 96, 2.5, 3.5],
+];
+
 function getStateForProgress(progress) {
   return ecosystemStateRanges.find((range) => progress >= range.start && progress < range.end)?.id ?? 'unified';
 }
@@ -146,7 +169,8 @@ function EcosystemLayer({ step }) {
         width={step.width}
         height={step.height}
         alt=""
-        loading="eager"
+        loading={step.id === 'access' ? 'eager' : 'lazy'}
+        fetchPriority={step.id === 'access' ? 'high' : 'low'}
         decoding="async"
         data-ecosystem-image="inactive"
         data-step-id={step.id}
@@ -158,6 +182,7 @@ function EcosystemLayer({ step }) {
         height={step.height}
         alt=""
         loading={step.id === 'access' ? 'eager' : 'lazy'}
+        fetchPriority={step.id === 'access' ? 'high' : 'low'}
         decoding="async"
         data-ecosystem-image="active"
         data-step-id={step.id}
@@ -233,6 +258,82 @@ function EcosystemConnectors() {
   );
 }
 
+function NetworkCluster({ className = '', mirrored = false }) {
+  return (
+    <div className={`absolute h-[34rem] w-[31rem] opacity-80 max-[900px]:h-[26rem] max-[900px]:w-[23rem] ${className}`}>
+      <div
+        className="absolute inset-0 rounded-full bg-[radial-gradient(ellipse_at_center,rgba(243,107,22,0.18),rgba(243,107,22,0.055)_38%,transparent_72%)] blur-2xl"
+      />
+      <div
+        className={[
+          'absolute inset-0 opacity-70',
+          'bg-[linear-gradient(90deg,rgba(243,107,22,0.09)_1px,transparent_1px),linear-gradient(rgba(243,107,22,0.08)_1px,transparent_1px)]',
+          'bg-[size:34px_34px]',
+          '[mask-image:radial-gradient(ellipse_at_center,black_0%,black_45%,transparent_76%)]',
+        ].join(' ')}
+      />
+      <svg
+        viewBox="0 0 430 470"
+        className={`absolute inset-0 h-full w-full ${mirrored ? '-scale-x-100' : ''}`}
+        fill="none"
+      >
+        {networkPaths.map((path, index) => (
+          <path
+            key={path}
+            d={path}
+            stroke="#F36B16"
+            strokeOpacity={index % 2 ? 0.2 : 0.28}
+            strokeWidth={index % 2 ? 1 : 1.25}
+            strokeLinecap="round"
+            strokeDasharray={index % 2 ? '4 12' : '2 10'}
+          >
+            <animate
+              attributeName="stroke-dashoffset"
+              values="0;-90"
+              dur={`${11 + index * 1.4}s`}
+              repeatCount="indefinite"
+            />
+          </path>
+        ))}
+        {networkNodes.map(([cx, cy, radius, duration]) => (
+          <circle
+            key={`${cx}-${cy}`}
+            cx={cx}
+            cy={cy}
+            r={radius}
+            fill="#F36B16"
+            fillOpacity="0.38"
+            stroke="#FFF7EF"
+            strokeWidth="1.4"
+          >
+            <animate attributeName="opacity" values="0.38;0.95;0.38" dur={`${duration}s`} repeatCount="indefinite" />
+          </circle>
+        ))}
+      </svg>
+    </div>
+  );
+}
+
+function EcosystemNetworkBackdrop() {
+  return (
+    <div aria-hidden="true" className="pointer-events-none absolute inset-0 z-0 overflow-hidden">
+      <NetworkCluster className="-left-24 top-16 [mask-image:radial-gradient(ellipse_at_left,black_0%,black_54%,transparent_78%)]" />
+      <NetworkCluster
+        mirrored
+        className="-right-24 top-[18%] opacity-60 [mask-image:radial-gradient(ellipse_at_right,black_0%,black_52%,transparent_78%)]"
+      />
+      <NetworkCluster
+        className="-left-20 bottom-[8%] opacity-45 [mask-image:radial-gradient(ellipse_at_left,black_0%,black_46%,transparent_76%)]"
+      />
+      <NetworkCluster
+        mirrored
+        className="-right-16 bottom-10 opacity-70 [mask-image:radial-gradient(ellipse_at_right,black_0%,black_52%,transparent_78%)]"
+      />
+      <div className="absolute inset-x-0 top-0 h-48 bg-[linear-gradient(180deg,rgba(252,250,247,0.98),rgba(252,250,247,0))]" />
+    </div>
+  );
+}
+
 export function EcosystemSection() {
   const sectionRef = useRef(null);
   const activeStateRef = useRef('intro');
@@ -242,7 +343,7 @@ export function EcosystemSection() {
     if (!section) return undefined;
 
     const reducedMotionQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
-    const header = document.querySelector('.elvora-header');
+    const header = document.querySelector('.landing-header');
     const composition = section.querySelector('[data-ecosystem-composition]');
     const connectorSvg = section.querySelector('[data-ecosystem-connectors]');
     const stack = section.querySelector('[data-ecosystem-stack]');
@@ -322,6 +423,7 @@ export function EcosystemSection() {
 
     const signalAnimations = new Map();
     let connectorFrame = 0;
+    let connectorSignalRefresh = false;
     let media;
     let timeline;
 
@@ -389,6 +491,11 @@ export function EcosystemSection() {
     };
 
     const syncSignalAnimations = (force = false) => {
+      if (!connectorSignalPulseEnabled) {
+        stopAllSignalAnimations();
+        return;
+      }
+
       const stateId = activeStateRef.current;
       if (stateId === 'intro' || stateId === 'unified' || reducedMotionQuery.matches || window.innerWidth <= 900) {
         stopAllSignalAnimations();
@@ -402,6 +509,8 @@ export function EcosystemSection() {
     };
 
     const updateConnectors = () => {
+      const forceSignalRefresh = connectorSignalRefresh;
+      connectorSignalRefresh = false;
       connectorFrame = 0;
       updateNavHeight();
 
@@ -456,13 +565,16 @@ export function EcosystemSection() {
         destinationHalo.setAttribute('cy', destinationY.toFixed(2));
       });
 
-      syncSignalAnimations(true);
+      syncSignalAnimations(forceSignalRefresh);
     };
 
-    const scheduleConnectorUpdate = () => {
+    const scheduleConnectorUpdate = (forceSignalRefresh = false) => {
+      connectorSignalRefresh = connectorSignalRefresh || forceSignalRefresh;
       if (connectorFrame) return;
       connectorFrame = window.requestAnimationFrame(updateConnectors);
     };
+
+    const scheduleForcedConnectorUpdate = () => scheduleConnectorUpdate(true);
 
     const setActiveState = (stateId) => {
       if (activeStateRef.current === stateId) return;
@@ -491,6 +603,7 @@ export function EcosystemSection() {
       });
 
       if (mobileCounter) mobileCounter.textContent = getMobileCounterText(stateId);
+      scheduleConnectorUpdate(true);
       syncSignalAnimations();
     };
 
@@ -525,7 +638,7 @@ export function EcosystemSection() {
       stopAllSignalAnimations();
       activeStateRef.current = '';
       setActiveState('intro');
-      scheduleConnectorUpdate();
+      scheduleConnectorUpdate(true);
     };
 
     const addStepState = (tl, label, activeIndex, lift) => {
@@ -592,6 +705,7 @@ export function EcosystemSection() {
 
       timeline = gsap.timeline({
         defaults: { ease: 'none' },
+        onUpdate: () => scheduleConnectorUpdate(),
         scrollTrigger: {
           trigger: section,
           start: 'top top',
@@ -601,11 +715,11 @@ export function EcosystemSection() {
           markers: false,
           onRefresh: () => {
             updateNavHeight();
-            scheduleConnectorUpdate();
-            syncSignalAnimations(true);
+            scheduleConnectorUpdate(true);
           },
           onUpdate: (self) => {
             setActiveState(getStateForProgress(self.progress));
+            scheduleConnectorUpdate();
           },
         },
       });
@@ -694,7 +808,7 @@ export function EcosystemSection() {
     if (window.ResizeObserver) {
       resizeObserver = new window.ResizeObserver(() => {
         updateNavHeight();
-        scheduleConnectorUpdate();
+        scheduleConnectorUpdate(true);
       });
       if (header) resizeObserver.observe(header);
       if (composition) resizeObserver.observe(composition);
@@ -706,9 +820,9 @@ export function EcosystemSection() {
       });
     }
 
-    window.addEventListener('resize', scheduleConnectorUpdate, { passive: true });
-    window.addEventListener('orientationchange', scheduleConnectorUpdate, { passive: true });
-    ScrollTrigger.addEventListener('refresh', scheduleConnectorUpdate);
+    window.addEventListener('resize', scheduleForcedConnectorUpdate, { passive: true });
+    window.addEventListener('orientationchange', scheduleForcedConnectorUpdate, { passive: true });
+    ScrollTrigger.addEventListener('refresh', scheduleForcedConnectorUpdate);
 
     const context = gsap.context(() => {
       media = gsap.matchMedia();
@@ -729,7 +843,7 @@ export function EcosystemSection() {
         gsap.set(activeSpine, { opacity: 1, scaleY: 1 });
         gsap.set(finalStatement, { opacity: 1, y: 0 });
         stopAllSignalAnimations();
-        scheduleConnectorUpdate();
+        scheduleConnectorUpdate(true);
       });
 
       media.add(
@@ -757,14 +871,14 @@ export function EcosystemSection() {
         () => buildTimeline({ lift: 7, scrub: 0.74 }),
       );
 
-      const imageDecodes = Array.from(section.querySelectorAll('[data-ecosystem-image]'))
+      const imageDecodes = Array.from(section.querySelectorAll('[data-ecosystem-image][data-step-id="access"]'))
         .map((image) => image.decode?.().catch(() => undefined));
       const fontsReady = document.fonts?.ready ?? Promise.resolve();
 
       Promise.all([Promise.all(imageDecodes), fontsReady]).then(() => {
         if (!section.isConnected) return;
         updateNavHeight();
-        scheduleConnectorUpdate();
+        scheduleConnectorUpdate(true);
         ScrollTrigger.refresh();
       });
     }, section);
@@ -773,9 +887,9 @@ export function EcosystemSection() {
       if (connectorFrame) window.cancelAnimationFrame(connectorFrame);
       stopAllSignalAnimations();
       resizeObserver?.disconnect();
-      window.removeEventListener('resize', scheduleConnectorUpdate);
-      window.removeEventListener('orientationchange', scheduleConnectorUpdate);
-      ScrollTrigger.removeEventListener('refresh', scheduleConnectorUpdate);
+      window.removeEventListener('resize', scheduleForcedConnectorUpdate);
+      window.removeEventListener('orientationchange', scheduleForcedConnectorUpdate);
+      ScrollTrigger.removeEventListener('refresh', scheduleForcedConnectorUpdate);
       timeline?.kill();
       media?.revert();
       context.revert();
@@ -786,11 +900,14 @@ export function EcosystemSection() {
   return (
     <section
       ref={sectionRef}
-      style={{ '--elvora-nav-height': '72px' }}
+      style={{
+        '--elvora-nav-height': '72px',
+      }}
       className={[
-        'elvora-hero-overlap-panel relative isolate min-h-[620svh] overflow-clip bg-[#FCFAF7] text-[#181818] lg:min-h-[700svh]',
-        'bg-[radial-gradient(circle_at_50%_58%,rgba(243,107,22,0.08),transparent_30%),linear-gradient(rgba(24,24,24,0.04)_1px,transparent_1px),linear-gradient(90deg,rgba(24,24,24,0.04)_1px,transparent_1px)]',
-        'bg-[size:auto,190px_190px,190px_190px] max-[900px]:min-h-[460svh] max-[900px]:bg-[size:auto,120px_120px,120px_120px]',
+        'relative z-20 isolate min-h-[620svh] overflow-clip rounded-t-[clamp(1.4rem,3vw,2.75rem)] bg-[#FCFAF7] text-[#181818]',
+        'shadow-[0_-34px_90px_rgba(24,24,24,0.12)] lg:-mt-[100svh] lg:min-h-[700svh]',
+        'bg-[radial-gradient(circle_at_50%_58%,rgba(243,107,22,0.08),transparent_30%),linear-gradient(rgba(243,107,22,0.045)_1px,transparent_1px),linear-gradient(90deg,rgba(243,107,22,0.045)_1px,transparent_1px)]',
+        'bg-[size:auto,170px_170px,170px_170px] max-[900px]:min-h-[460svh] max-[900px]:bg-[size:auto,115px_115px,115px_115px]',
         'motion-reduce:min-h-0',
         '[@media(max-height:760px)_and_(min-width:901px)]:min-h-[540svh]',
       ].join(' ')}
@@ -802,8 +919,9 @@ export function EcosystemSection() {
         className="pointer-events-none absolute inset-0 -z-10 bg-[linear-gradient(180deg,rgba(252,250,247,0.96),rgba(252,250,247,0.88)_12%,rgba(252,250,247,0.88)_88%,rgba(252,250,247,0.96)),radial-gradient(circle_at_50%_58%,rgba(243,107,22,0.06),transparent_42%)]"
       />
 
-      <div className="sticky top-[var(--elvora-nav-height)] h-[calc(100svh-var(--elvora-nav-height))] overflow-clip motion-reduce:relative motion-reduce:top-0 motion-reduce:h-auto">
-        <div className="mx-auto flex h-full w-[min(100%-24px,760px)] flex-col xl:w-[min(100%-48px,1500px)] min-[901px]:w-[min(100%-32px,1220px)]">
+      <div className="relative z-10 sticky top-[var(--elvora-nav-height)] h-[calc(100svh-var(--elvora-nav-height))] overflow-clip motion-reduce:relative motion-reduce:top-0 motion-reduce:h-auto">
+        <EcosystemNetworkBackdrop />
+        <div className="relative z-10 mx-auto flex h-full w-[min(100%-24px,760px)] flex-col xl:w-[min(100%-48px,1500px)] min-[901px]:w-[min(100%-32px,1220px)]">
           <EcosystemHeader />
 
           <div
