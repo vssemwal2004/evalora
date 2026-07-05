@@ -10,6 +10,7 @@ import {
   ChevronRight,
   Clock3,
   FileText,
+  IdCard,
   Loader2,
   Lock,
   MapPin,
@@ -25,6 +26,12 @@ import {
   X,
 } from "lucide-react";
 import { api } from "../../lib/api";
+import { uploadEvidenceDataUrl } from "../../lib/storage";
+
+const FACE_API_MODEL_URL = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api/model';
+const IDENTITY_MATCH_THRESHOLD = 0.6;
+const IDENTITY_REVIEW_THRESHOLD = 50;
+const MAX_CARD_FACE_HEIGHT_RATIO = 0.32;
 
 const securitySteps = [
   {
@@ -34,6 +41,7 @@ const securitySteps = [
     icon: MonitorCheck,
   },
   { key: "camera", label: "Camera", caption: "Face visibility", icon: Camera },
+  { key: "identity", label: "Identity", caption: "ID card match", icon: IdCard },
   {
     key: "microphone",
     label: "Permissions",
@@ -53,6 +61,75 @@ const securitySteps = [
     icon: ShieldCheck,
   },
 ];
+
+let faceApiLoadPromise = null;
+
+async function loadFaceApi() {
+  if (!faceApiLoadPromise) {
+    faceApiLoadPromise = import('@vladmandic/face-api').then(async (module) => {
+      const faceapi = module.default || module;
+      await Promise.all([
+        faceapi.nets.tinyFaceDetector.loadFromUri(FACE_API_MODEL_URL),
+        faceapi.nets.faceLandmark68Net.loadFromUri(FACE_API_MODEL_URL),
+        faceapi.nets.faceRecognitionNet.loadFromUri(FACE_API_MODEL_URL),
+      ]);
+      return faceapi;
+    });
+  }
+  return faceApiLoadPromise;
+}
+
+function dataUrlToImage(dataUrl) {
+  return new Promise((resolve, reject) => {
+    const image = new window.Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error('Captured image could not be read.'));
+    image.src = dataUrl;
+  });
+}
+
+function captureVideoFrame(video, maxWidth = 420, quality = 0.58) {
+  if (!video?.videoWidth || !video?.videoHeight) {
+    throw new Error('Camera frame is not ready.');
+  }
+
+  const scale = Math.min(maxWidth / video.videoWidth, 1);
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.round(video.videoWidth * scale);
+  canvas.height = Math.round(video.videoHeight * scale);
+  const context = canvas.getContext('2d');
+  context.drawImage(video, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL('image/jpeg', quality);
+}
+
+async function detectFaceDescriptor(faceapi, dataUrl) {
+  const image = await dataUrlToImage(dataUrl);
+  const detection = await faceapi
+    .detectSingleFace(image, new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.45 }))
+    .withFaceLandmarks()
+    .withFaceDescriptor();
+
+  if (!detection?.descriptor) {
+    throw new Error('No clear face was detected. Retake the photo in better light.');
+  }
+
+  const box = detection.detection.box;
+  return {
+    descriptor: Array.from(detection.descriptor),
+    faceHeightRatio: box.height / image.height,
+    faceWidthRatio: box.width / image.width,
+  };
+}
+
+function compareFaceDescriptors(faceapi, selfieDescriptor, idCardDescriptor) {
+  const distance = faceapi.euclideanDistance(selfieDescriptor, idCardDescriptor);
+  const matchPercentage = Math.max(0, Math.min(100, (1 - distance / IDENTITY_MATCH_THRESHOLD) * 100));
+  return {
+    distance,
+    matchPercentage: Number(matchPercentage.toFixed(1)),
+    status: matchPercentage >= IDENTITY_REVIEW_THRESHOLD ? 'passed' : 'manual_review',
+  };
+}
 
 function buildSecurityTerms(settings = {}) {
   const terms = [];
@@ -351,7 +428,17 @@ function EntryFlow({ exam, onClose, onAttemptUpdated, onStarted, reverify = fals
   const [cameraStream, setCameraStream] = useState(null);
   const [countdown, setCountdown] = useState(reverify ? 0 : 30);
   const [accepted, setAccepted] = useState(reverify);
+  const [identity, setIdentity] = useState({
+    selfieImage: '',
+    idCardImage: '',
+    matchPercentage: null,
+    status: '',
+  });
   const videoRef = useRef(null);
+  const flowSteps = useMemo(() => {
+    const required = new Set(exam.requiredSetupSteps || []);
+    return securitySteps.filter((step) => step.key === 'review' || (required.has(step.key) && !(reverify && step.key === 'identity')));
+  }, [exam.requiredSetupSteps, reverify]);
 
   useEffect(() => {
     if (videoRef.current && cameraStream)
@@ -388,7 +475,7 @@ function EntryFlow({ exam, onClose, onAttemptUpdated, onStarted, reverify = fals
 
   function advance() {
     setError("");
-    setActiveSecurity((value) => Math.min(value + 1, securitySteps.length - 1));
+    setActiveSecurity((value) => Math.min(value + 1, flowSteps.length - 1));
   }
 
   async function confirmDetails() {
@@ -510,6 +597,104 @@ function EntryFlow({ exam, onClose, onAttemptUpdated, onStarted, reverify = fals
     }
   }
 
+  async function ensureCameraStream() {
+    if (cameraStream?.getVideoTracks().some((track) => track.readyState === "live")) {
+      return cameraStream;
+    }
+
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: {
+        facingMode: "user",
+        width: { ideal: 1280 },
+        height: { ideal: 720 },
+      },
+      audio: false,
+    });
+    setCameraStream(stream);
+    await new Promise((resolve) => window.setTimeout(resolve, 700));
+    return stream;
+  }
+
+  async function captureIdentityFrame(kind) {
+    setWorking(true);
+    setError("");
+    try {
+      await ensureCameraStream();
+      await new Promise((resolve) => window.setTimeout(resolve, 300));
+      const image = kind === 'idCardImage'
+        ? captureVideoFrame(videoRef.current, 960, 0.72)
+        : captureVideoFrame(videoRef.current, 520, 0.64);
+      setIdentity((current) => ({ ...current, [kind]: image, matchPercentage: null, status: '' }));
+    } catch (requestError) {
+      fail(requestError.message || "Unable to capture identity image.");
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  async function verifyIdentity() {
+    setWorking(true);
+    setError("");
+    try {
+      if (!identity.selfieImage || !identity.idCardImage) {
+        throw new Error("Capture both your face and identity card before verifying.");
+      }
+
+      const faceapi = await loadFaceApi();
+      const [selfieFace, idCardFace] = await Promise.all([
+        detectFaceDescriptor(faceapi, identity.selfieImage),
+        detectFaceDescriptor(faceapi, identity.idCardImage),
+      ]);
+      if (idCardFace.faceHeightRatio > MAX_CARD_FACE_HEIGHT_RATIO || idCardFace.faceWidthRatio > 0.26) {
+        throw new Error('The identity card capture looks like a normal selfie. Hold the physical ID card in frame so the card edges and printed photo are visible.');
+      }
+      const selfieDescriptor = selfieFace.descriptor;
+      const idCardDescriptor = idCardFace.descriptor;
+      const result = compareFaceDescriptors(faceapi, selfieDescriptor, idCardDescriptor);
+      let selfieEvidence = { url: identity.selfieImage, key: '' };
+      let idCardEvidence = { url: identity.idCardImage, key: '' };
+
+      try {
+        [selfieEvidence, idCardEvidence] = await Promise.all([
+          uploadEvidenceDataUrl(identity.selfieImage, {
+            category: 'identity',
+            assignmentId: exam.assignmentId,
+            filename: 'identity-selfie.jpg',
+          }),
+          uploadEvidenceDataUrl(identity.idCardImage, {
+            category: 'identity',
+            assignmentId: exam.assignmentId,
+            filename: 'identity-card.jpg',
+          }),
+        ]);
+      } catch (uploadError) {
+        throw new Error(uploadError.message || 'Identity evidence could not be uploaded to Cloudflare R2.');
+      }
+
+      const response = await api.post(`/student/exams/${exam.assignmentId}/identity-verification`, {
+        selfieImage: selfieEvidence.url || identity.selfieImage,
+        idCardImage: idCardEvidence.url || identity.idCardImage,
+        selfieStorageKey: selfieEvidence.key || '',
+        idCardStorageKey: idCardEvidence.key || '',
+        selfieDescriptor,
+        idCardDescriptor,
+        matchPercentage: result.matchPercentage,
+        distance: result.distance,
+        threshold: IDENTITY_MATCH_THRESHOLD,
+        status: result.status,
+      });
+
+      setIdentity((current) => ({ ...current, matchPercentage: result.matchPercentage, status: result.status }));
+      onAttemptUpdated(response.data.attempt);
+      setPassed((current) => new Set([...current, "identity"]));
+      advance();
+    } catch (requestError) {
+      fail(requestError.response?.data?.message || requestError.message || "Identity verification failed. Retake both photos and try again.");
+    } finally {
+      setWorking(false);
+    }
+  }
+
   async function checkPermissions() {
     setWorking(true);
     setError("");
@@ -561,7 +746,7 @@ function EntryFlow({ exam, onClose, onAttemptUpdated, onStarted, reverify = fals
   }
 
   function completeReview() {
-    const required = ["browser", "camera", "microphone", "fullscreen"];
+    const required = flowSteps.map((step) => step.key).filter((key) => key !== 'review');
     if (
       !required.every(
         (key) =>
@@ -818,17 +1003,19 @@ function EntryFlow({ exam, onClose, onAttemptUpdated, onStarted, reverify = fals
       </ModalFrame>
     );
 
-  const current = securitySteps[activeSecurity];
+  const current = flowSteps[activeSecurity] || flowSteps[0] || securitySteps[0];
   const runCurrent =
     current.key === "browser"
       ? checkEnvironment
       : current.key === "camera"
         ? checkCamera
-        : current.key === "microphone"
-          ? checkPermissions
-          : current.key === "fullscreen"
-            ? checkFullscreen
-            : completeReview;
+        : current.key === "identity"
+          ? verifyIdentity
+          : current.key === "microphone"
+            ? checkPermissions
+            : current.key === "fullscreen"
+              ? checkFullscreen
+              : completeReview;
   const CurrentIcon = current.icon;
   const body = {
     browser: {
@@ -846,6 +1033,15 @@ function EntryFlow({ exam, onClose, onAttemptUpdated, onStarted, reverify = fals
       text: "Sit in a well-lit place and position your full face inside the camera frame. Remove masks, caps, or anything covering your face.",
       icon: Camera,
       notes: [],
+    },
+    identity: {
+      title: "Identity card match",
+      text: "Capture your face, then hold your physical identity card close enough that the photo on the card is clear. The match percentage is saved for proctor and admin review.",
+      icon: IdCard,
+      notes: [
+        [Camera, "Live face capture"],
+        [IdCard, "Physical ID card capture"],
+      ],
     },
     microphone: {
       title: "Location and microphone",
@@ -880,12 +1076,12 @@ function EntryFlow({ exam, onClose, onAttemptUpdated, onStarted, reverify = fals
             <div>
               <p className="font-bold">Security check</p>
               <p className="text-xs text-slate-400">
-                {activeSecurity + 1} of {securitySteps.length} steps
+                {activeSecurity + 1} of {flowSteps.length} steps
               </p>
             </div>
           </div>
           <div className="mt-8 space-y-2">
-            {securitySteps.map((step, index) => {
+            {flowSteps.map((step, index) => {
               const Icon = step.icon;
               const done = index < activeSecurity;
               const active = index === activeSecurity;
@@ -968,6 +1164,71 @@ function EntryFlow({ exam, onClose, onAttemptUpdated, onStarted, reverify = fals
                 ) : null}
               </div>
             ) : null}
+            {current.key === "identity" ? (
+              <div className="mt-6 grid gap-5 xl:grid-cols-[minmax(280px,0.9fr)_minmax(280px,1.1fr)]">
+                <div className="relative aspect-video overflow-hidden rounded-2xl bg-slate-950 shadow-inner">
+                  <video
+                    ref={videoRef}
+                    autoPlay
+                    playsInline
+                    muted
+                    className="h-full w-full object-cover scale-x-[-1]"
+                  />
+                  {!cameraStream ? (
+                    <div className="absolute inset-0 grid place-items-center text-center text-white">
+                      <div>
+                        <Video size={30} className="mx-auto text-slate-500" />
+                        <p className="mt-2 text-sm font-semibold text-slate-400">
+                          Camera preview will appear here
+                        </p>
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  {[
+                    ['selfieImage', 'Face capture', 'Look directly at the camera.', 'Capture face'],
+                    ['idCardImage', 'Identity card', 'Hold the full physical card near the camera. The printed photo should be visible and your live face should not fill the frame.', 'Capture ID card'],
+                  ].map(([key, label, hint, action]) => (
+                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3" key={key}>
+                      <div className="aspect-video overflow-hidden rounded-xl bg-white">
+                        {identity[key] ? (
+                          <img src={identity[key]} alt={label} className="h-full w-full object-cover" />
+                        ) : (
+                          <div className="grid h-full place-items-center text-center text-slate-400">
+                            <div>
+                              <IdCard size={24} className="mx-auto" />
+                              <p className="mt-1 text-xs font-bold">{label}</p>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                      <p className="mt-3 text-xs font-bold text-slate-800">{label}</p>
+                      <p className="mt-1 min-h-8 text-[11px] leading-4 text-slate-500">{hint}</p>
+                      <button
+                        className="secondary-button mt-3 h-9 w-full justify-center text-xs"
+                        type="button"
+                        onClick={() => captureIdentityFrame(key)}
+                        disabled={working}
+                      >
+                        <Camera size={14} />
+                        {action}
+                      </button>
+                    </div>
+                  ))}
+                  {identity.matchPercentage !== null ? (
+                    <div className={`sm:col-span-2 rounded-2xl border p-4 ${identity.status === 'passed' ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-amber-200 bg-amber-50 text-amber-800'}`}>
+                      <p className="text-sm font-bold">Face match: {identity.matchPercentage}%</p>
+                      <p className="mt-1 text-xs leading-5">
+                        {identity.status === 'passed'
+                          ? 'Identity match passed and will appear in the final report.'
+                          : 'Identity evidence is saved for proctor and admin review.'}
+                      </p>
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
             {body.notes.length ? (
               <div className="mt-6 grid gap-3 sm:grid-cols-2">
                 {body.notes.map(([Icon, label]) => (
@@ -987,7 +1248,7 @@ function EntryFlow({ exam, onClose, onAttemptUpdated, onStarted, reverify = fals
             ) : null}
             {current.key === "review" ? (
               <div className="mt-6 grid gap-2">
-                {securitySteps.slice(0, 4).map((step) => (
+                {flowSteps.filter((step) => step.key !== 'review').map((step) => (
                   <div
                     key={step.key}
                     className="flex items-center justify-between rounded-xl border border-emerald-100 bg-emerald-50 px-4 py-3"
@@ -1023,9 +1284,11 @@ function EntryFlow({ exam, onClose, onAttemptUpdated, onStarted, reverify = fals
                     ? "Run environment check"
                     : current.key === "camera"
                       ? "Turn on camera"
-                      : current.key === "microphone"
-                        ? "Allow and verify"
-                        : "Enter full screen"}
+                      : current.key === "identity"
+                        ? "Verify identity match"
+                        : current.key === "microphone"
+                          ? "Allow and verify"
+                          : "Enter full screen"}
                 <ChevronRight size={17} />
               </>
             )}

@@ -219,6 +219,13 @@ router.post('/assignments/:assignmentId/verify', proctorVerifyLimiter, validateB
           attemptStatus: attempt?.status || 'not_started',
           lastHeartbeatAt: attempt?.lastHeartbeatAt,
           securityScore: attempt?.securityScore || 0,
+          identityVerification: attempt?.identityVerification
+            ? {
+                status: attempt.identityVerification.status,
+                matchPercentage: attempt.identityVerification.matchPercentage,
+                capturedAt: attempt.identityVerification.capturedAt,
+              }
+            : null,
           alertCount: alertCountsByStudentId[String(student._id)] || 0,
         };
       }),

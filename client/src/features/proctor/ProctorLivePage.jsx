@@ -7,6 +7,7 @@ import {
   ChevronDown,
   CheckCircle2,
   Eye,
+  IdCard,
   KeyRound,
   MessageSquare,
   Minus,
@@ -325,6 +326,7 @@ function StudentDetail({
             ['Exam ID', student.examId],
             ['Course', `${student.courseName}${student.courseId ? ` (${student.courseId})` : ''}`],
             ['Security score', student.securityScore || 0],
+            ['ID match', student.identityVerification?.status && student.identityVerification.status !== 'not_started' ? `${Number(student.identityVerification.matchPercentage || 0).toFixed(1)}% · ${String(student.identityVerification.status).replace(/_/g, ' ')}` : 'Pending'],
             ['Last heartbeat', formatDateTime(student.lastHeartbeatAt)],
           ].map(([label, value]) => (
             <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2" key={label}>
@@ -334,7 +336,7 @@ function StudentDetail({
           ))}
         </div>
 
-        <div className="grid gap-3 md:grid-cols-3">
+        <div className="grid gap-3 md:grid-cols-4">
           <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
             <Video size={18} className={settings.cameraMonitoring || settings.cameraRequired ? 'text-brand-500' : 'text-slate-300'} />
             <p className="mt-2 text-xs font-bold uppercase text-slate-500">Camera</p>
@@ -351,6 +353,15 @@ function StudentDetail({
             <ShieldAlert size={18} className={settings.ufmActionEnabled ? 'text-brand-500' : 'text-slate-300'} />
             <p className="mt-2 text-xs font-bold uppercase text-slate-500">UFM</p>
             <p className="mt-1 text-sm font-semibold text-slate-950">{settings.ufmActionEnabled ? 'Pending review flow' : 'Disabled'}</p>
+          </div>
+          <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+            <IdCard size={18} className={student.identityVerification?.status === 'manual_review' ? 'text-amber-600' : 'text-brand-500'} />
+            <p className="mt-2 text-xs font-bold uppercase text-slate-500">Identity</p>
+            <p className="mt-1 text-sm font-semibold text-slate-950">
+              {student.identityVerification?.status && student.identityVerification.status !== 'not_started'
+                ? `${Number(student.identityVerification.matchPercentage || 0).toFixed(1)}% match`
+                : 'Pending'}
+            </p>
           </div>
         </div>
 

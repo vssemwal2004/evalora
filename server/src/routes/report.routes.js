@@ -7,10 +7,14 @@ const AssessmentSecurityEvent = require('../models/AssessmentSecurityEvent');
 const AssessmentStudent = require('../models/AssessmentStudent');
 const { ROLES } = require('../constants/roles');
 const { authenticate, requirePermission, requireRole } = require('../middleware/auth');
-const { validateObjectIdParams } = require('../middleware/validate');
+const { validateBody, validateObjectIdParams, z } = require('../middleware/validate');
 const { writeAuditLog } = require('../services/audit.service');
 
 const router = express.Router();
+const ufmReviewBodySchema = z.object({
+  decision: z.enum(['ufm', 'clear']),
+  note: z.string().trim().max(1000).optional().default(''),
+});
 
 router.use(authenticate, requireRole(ROLES.SUPER_ADMIN, ROLES.ADMIN));
 router.use('/assessments/:assessmentId', validateObjectIdParams('assessmentId'));
@@ -116,9 +120,22 @@ function summarizeAttempt({ assignment, attempt, answers, questions, securityEve
   const criticalEvents = securityEvents.filter((event) => event.severity === 'critical').length;
   const ufmReviews = securityEvents.filter((event) => event.type === 'ufm_pending').map(serializeUfmReview);
   const securityScore = asNumber(attempt?.securityScore, securityEvents.reduce((total, event) => total + asNumber(event.score), 0));
+  const identity = attempt?.identityVerification || {};
+  const identityVerification = {
+    status: identity.status || 'not_started',
+    matchPercentage: asNumber(identity.matchPercentage, 0),
+    distance: identity.distance ?? null,
+    threshold: identity.threshold ?? 0.6,
+    capturedAt: identity.capturedAt || null,
+    selfieImage: identity.selfieImage || '',
+    idCardImage: identity.idCardImage || '',
+    selfieStorageKey: identity.selfieStorageKey || '',
+    idCardStorageKey: identity.idCardStorageKey || '',
+    reviewNote: identity.reviewNote || '',
+  };
   const percentage = maxMarks > 0 ? Number(((score / maxMarks) * 100).toFixed(2)) : 0;
   const status = attempt?.status || assignment.examStatus || 'not_started';
-  const integrityStatus = status === 'ufm' || ufmReviews.length > 0 || criticalEvents > 0 || securityScore >= 10 ? 'flagged' : 'clean';
+  const integrityStatus = status === 'ufm' || ufmReviews.length > 0 || criticalEvents > 0 || securityScore >= 10 || identityVerification.status === 'manual_review' ? 'flagged' : 'clean';
 
   return {
     assignmentId: assignment._id,
@@ -151,6 +168,7 @@ function summarizeAttempt({ assignment, attempt, answers, questions, securityEve
     criticalEvents,
     totalSecurityEvents: securityEvents.length,
     ufmReviews,
+    identityVerification,
     integrityStatus,
     securitySummary: attempt?.securitySummary || {},
     questionBreakdown,
@@ -314,7 +332,16 @@ function buildDistributions(rows, securityEvents) {
 }
 
 function serializeRows(rows) {
-  return rows.map(({ questionBreakdown: _questionBreakdown, securityEvents: _securityEvents, ...row }) => row);
+  return rows.map(({ questionBreakdown: _questionBreakdown, securityEvents: _securityEvents, identityVerification, ...row }) => ({
+    ...row,
+    identityVerification: identityVerification
+      ? {
+          ...identityVerification,
+          selfieImage: '',
+          idCardImage: '',
+        }
+      : identityVerification,
+  }));
 }
 
 router.get('/assessments', requirePermission('reports.view'), async (req, res, next) => {
@@ -426,6 +453,8 @@ router.get('/assessments/:assessmentId/export', requirePermission('reports.expor
         'Max Marks',
         'Percentage',
         'Security Score',
+        'Identity Match',
+        'Identity Status',
         'Warnings',
         'Critical Events',
         'UFM Reviews',
@@ -454,6 +483,8 @@ router.get('/assessments/:assessmentId/export', requirePermission('reports.expor
         maxMarks: row.maxMarks,
         percentage: row.percentage,
         securityScore: row.securityScore,
+        identityMatch: row.identityVerification?.matchPercentage || 0,
+        identityStatus: row.identityVerification?.status || 'not_started',
         warningEvents: row.warningEvents,
         criticalEvents: row.criticalEvents,
         ufmReviews: row.ufmReviews?.length || 0,
@@ -475,6 +506,84 @@ router.get('/assessments/:assessmentId/candidates/:assignmentId', requirePermiss
     if (!candidate) return res.status(404).json({ message: 'Candidate report not found.' });
 
     return res.json({ assessment: report.assessment, candidate });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.post('/assessments/:assessmentId/candidates/:assignmentId/ufm-review', requirePermission('ufm.reverse'), validateBody(ufmReviewBodySchema), async (req, res, next) => {
+  try {
+    const assessment = await Assessment.findOne({ _id: req.params.assessmentId, ...getScopedQuery(req) });
+    if (!assessment) return res.status(404).json({ message: 'Assessment report not found.' });
+
+    const [assignment, attempt] = await Promise.all([
+      AssessmentStudent.findOne({ _id: req.params.assignmentId, assessmentId: assessment._id }),
+      AssessmentAttempt.findOne({ assessmentId: assessment._id, assessmentStudentId: req.params.assignmentId }),
+    ]);
+
+    if (!assignment || !attempt) {
+      return res.status(404).json({ message: 'Candidate attempt not found.' });
+    }
+
+    const decision = req.body.decision;
+    const note = String(req.body.note || '').trim();
+    const reviewStatus = decision === 'ufm' ? 'confirmed' : 'cleared';
+    const now = new Date();
+
+    await AssessmentSecurityEvent.updateMany(
+      {
+        assessmentId: assessment._id,
+        assessmentStudentId: assignment._id,
+        type: { $in: ['ufm_pending', 'identity_verification'] },
+      },
+      {
+        $set: {
+          'metadata.reviewStatus': reviewStatus,
+          'metadata.reviewedBy': req.user._id,
+          'metadata.reviewerName': req.user.name,
+          'metadata.reviewedAt': now,
+          'metadata.reviewNote': note,
+        },
+      }
+    );
+
+    if (attempt.identityVerification) {
+      attempt.identityVerification.reviewedBy = req.user._id;
+      attempt.identityVerification.reviewedAt = now;
+      attempt.identityVerification.reviewNote = note;
+      if (attempt.identityVerification.status === 'manual_review' && decision === 'clear') {
+        attempt.identityVerification.status = 'passed';
+      }
+    }
+
+    if (decision === 'ufm') {
+      attempt.status = 'ufm';
+      attempt.submittedAt = attempt.submittedAt || now;
+      assignment.examStatus = 'ufm';
+    } else if (assignment.examStatus === 'ufm') {
+      assignment.examStatus = attempt.submittedAt ? 'submitted' : attempt.startedAt ? 'in_progress' : 'not_started';
+      attempt.status = attempt.submittedAt ? 'submitted' : attempt.startedAt ? 'in_progress' : 'setup';
+    }
+
+    await Promise.all([attempt.save(), assignment.save()]);
+
+    await writeAuditLog(req, {
+      action: decision === 'ufm' ? 'reports.ufm.confirm' : 'reports.ufm.clear',
+      targetType: 'AssessmentStudent',
+      targetId: assignment._id,
+      ownerAdminId: assessment.ownerAdminId,
+      newValue: {
+        assessmentId: assessment._id,
+        note,
+      },
+    });
+
+    return res.json({
+      decision,
+      assignmentStatus: assignment.examStatus,
+      attemptStatus: attempt.status,
+      identityVerification: attempt.identityVerification,
+    });
   } catch (error) {
     return next(error);
   }

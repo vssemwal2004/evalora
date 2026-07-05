@@ -220,6 +220,7 @@ const assessmentSchema = new mongoose.Schema(
         detectMobilePhone: true,
         detectLookingAway: true,
         detectCameraBlocked: true,
+        identityVerificationRequired: true,
         detectionIntervalMs: 1500,
         confidenceThreshold: 0.75,
         violationCooldownSeconds: 10,

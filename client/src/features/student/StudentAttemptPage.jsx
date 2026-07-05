@@ -24,9 +24,13 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext.jsx';
 import { api } from '../../lib/api';
+import { uploadEvidenceBlob, uploadEvidenceDataUrl } from '../../lib/storage';
 
 const HARD_SECURITY_HOLD_TYPES = ['tab_switch', 'window_blur', 'fullscreen_exit', 'screenshot_attempt', 'duplicate_tab', 'shortcut_attempt', 'idle_detected'];
 const PROCTOR_ONLY_TYPES = ['camera_missing', 'microphone_missing', 'camera_movement', 'ai_unavailable', 'ai_no_face', 'ai_multiple_faces', 'ai_looking_away', 'ai_camera_blocked', 'ai_mobile_detected', 'noise_detected'];
+const MEDIAPIPE_WASM_URL = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm';
+const MEDIAPIPE_FACE_MODEL_URL = 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task';
+const RECORDING_MIME_TYPE = 'video/webm;codecs=vp8,opus';
 
 function socketUrl() {
   const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
@@ -71,6 +75,23 @@ function buildAnswerMap(items = []) {
       },
     ])
   );
+}
+
+function captureEvidenceFrame(video, maxWidth = 360, quality = 0.52) {
+  if (!video?.videoWidth || !video?.videoHeight) return '';
+  const scale = Math.min(maxWidth / video.videoWidth, 1);
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.round(video.videoWidth * scale);
+  canvas.height = Math.round(video.videoHeight * scale);
+  canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL('image/jpeg', quality);
+}
+
+function getSupportedRecordingMimeType() {
+  if (!window.MediaRecorder) return '';
+  if (window.MediaRecorder.isTypeSupported?.(RECORDING_MIME_TYPE)) return RECORDING_MIME_TYPE;
+  if (window.MediaRecorder.isTypeSupported?.('video/webm')) return 'video/webm';
+  return '';
 }
 
 function isAnswered(question, answer) {
@@ -249,9 +270,14 @@ export function StudentAttemptPage() {
   const eventCooldowns = useRef({});
   const mediaIncidentRef = useRef({});
   const faceDetectingRef = useRef(false);
-  const fallbackFaceModelRef = useRef(null);
-  const fallbackFaceModelLoadingRef = useRef(false);
+  const faceLandmarkerRef = useRef(null);
+  const faceLandmarkerLoadingRef = useRef(false);
+  const objectDetectorRef = useRef(null);
+  const objectDetectorLoadingRef = useRef(false);
   const mediaStreamRef = useRef(null);
+  const recordingChunksRef = useRef([]);
+  const mediaRecorderRef = useRef(null);
+  const recordingUploadPromiseRef = useRef(null);
   const liveMediaStreamRef = useRef(null);
   const proctorPeerRef = useRef(null);
   const studentSocketRef = useRef(null);
@@ -377,6 +403,93 @@ export function StudentAttemptPage() {
     },
     [assignmentId, navigate]
   );
+
+  const startExamRecording = useCallback((stream) => {
+    if (!stream || mediaRecorderRef.current || !window.MediaRecorder) return;
+    const mimeType = getSupportedRecordingMimeType();
+    if (!mimeType) return;
+
+    try {
+      const recorder = new window.MediaRecorder(stream, {
+        mimeType,
+        videoBitsPerSecond: 260000,
+        audioBitsPerSecond: 24000,
+      });
+      recordingChunksRef.current = [];
+      recorder.ondataavailable = (event) => {
+        if (event.data?.size > 0) recordingChunksRef.current.push(event.data);
+      };
+      recorder.start(15000);
+      mediaRecorderRef.current = recorder;
+    } catch (recordingError) {
+      console.error('Exam recording could not start', recordingError);
+    }
+  }, []);
+
+  const stopAndUploadExamRecording = useCallback(async (reason = 'submitted') => {
+    if (recordingUploadPromiseRef.current) return recordingUploadPromiseRef.current;
+    const recorder = mediaRecorderRef.current;
+    if (!recorder) return null;
+
+    recordingUploadPromiseRef.current = new Promise((resolve, reject) => {
+      const finish = async () => {
+        try {
+          const chunks = recordingChunksRef.current;
+          recordingChunksRef.current = [];
+          mediaRecorderRef.current = null;
+          if (!chunks.length) {
+            resolve(null);
+            return;
+          }
+
+          const type = recorder.mimeType || 'video/webm';
+          const blob = new window.Blob(chunks, { type });
+          const evidence = await uploadEvidenceBlob(blob, {
+            category: 'recording',
+            assignmentId,
+            filename: `exam-recording-${reason}.webm`,
+          });
+
+          await api.post(`/student/exams/${assignmentId}/security-event`, {
+            type: 'exam_recording',
+            severity: 'info',
+            score: 0,
+            message: `Exam recording uploaded (${reason}).`,
+            metadata: {
+              evidence: {
+                recordingUrl: evidence.url,
+                recordingKey: evidence.key,
+                contentType: evidence.contentType,
+                size: evidence.size,
+              },
+            },
+            occurredAt: new Date().toISOString(),
+          });
+
+          resolve(evidence);
+        } catch (recordingError) {
+          console.error('Exam recording upload failed', recordingError);
+          reject(recordingError);
+        }
+      };
+
+      recorder.addEventListener('stop', finish, { once: true });
+      if (recorder.state === 'inactive') {
+        finish();
+        return;
+      }
+      try {
+        recorder.requestData();
+      } catch {
+        // Some browsers throw if the recorder is already stopping.
+      }
+      recorder.stop();
+    }).finally(() => {
+      recordingUploadPromiseRef.current = null;
+    });
+
+    return recordingUploadPromiseRef.current;
+  }, [assignmentId]);
 
   const startLocalSecurityHold = useCallback((type, reason, phase = 'grace') => {
     if (!HARD_SECURITY_HOLD_TYPES.includes(type)) return;
@@ -550,7 +663,7 @@ export function StudentAttemptPage() {
       document.removeEventListener('cut', blockEvent);
       document.removeEventListener('paste', blockEvent);
     };
-  }, [exam, sendSecurityEvent]);
+  }, [assignmentId, exam, sendSecurityEvent]);
 
   useEffect(() => {
     if (!exam?.settings?.shortcutBlocking && !exam?.settings?.screenshotWarning) return undefined;
@@ -598,7 +711,7 @@ export function StudentAttemptPage() {
       window.removeEventListener('keydown', handleRestrictedKey, true);
       window.removeEventListener('beforeunload', protectUnload);
     };
-  }, [exam, sendSecurityEvent]);
+  }, [assignmentId, exam, sendSecurityEvent]);
 
   useEffect(() => {
     if (!exam?.settings?.multipleTabDetection || typeof window.BroadcastChannel === 'undefined') return undefined;
@@ -748,9 +861,36 @@ export function StudentAttemptPage() {
       });
     }
 
-    function sendProctorOnlyEvent(type, payload = {}, cooldownMs = 45000) {
+    async function sendProctorOnlyEvent(type, payload = {}, cooldownMs = 45000, evidenceVideo = null) {
       if (!shouldReportMediaIncident(type, cooldownMs)) return;
-      sendSecurityEvent(type, { ...payload, cooldownMs });
+      const metadata = { ...(payload.metadata || {}) };
+
+      if (evidenceVideo) {
+        const snapshot = captureEvidenceFrame(evidenceVideo);
+        if (snapshot) {
+          try {
+            const evidence = await uploadEvidenceDataUrl(snapshot, {
+              category: 'snapshot',
+              assignmentId,
+              filename: `${type}.jpg`,
+            });
+            metadata.evidence = {
+              ...(metadata.evidence || {}),
+              snapshotUrl: evidence.url,
+              snapshotKey: evidence.key,
+              contentType: evidence.contentType,
+              size: evidence.size,
+            };
+          } catch {
+            metadata.evidence = {
+              ...(metadata.evidence || {}),
+              uploadStatus: 'r2_unavailable',
+            };
+          }
+        }
+      }
+
+      sendSecurityEvent(type, { ...payload, metadata, cooldownMs });
     }
 
     function noteStableSignal(key, isActive, threshold = 2) {
@@ -770,82 +910,101 @@ export function StudentAttemptPage() {
       return Number(mediaIncidentRef.current[`${key}ClearFrames`] || 0) >= threshold;
     }
 
-    function detectPossibleMobileObject(frame, width, height) {
-      let brightEdgeSamples = 0;
-      let darkRectangleSamples = 0;
-      let totalSamples = 0;
-
-      for (let y = Math.floor(height * 0.28); y < height; y += 4) {
-        for (let x = 0; x < width; x += 4) {
-          const offset = (y * width + x) * 4;
-          const luma = (frame[offset] + frame[offset + 1] + frame[offset + 2]) / 3;
-          const rightOffset = (y * width + Math.min(x + 1, width - 1)) * 4;
-          const bottomOffset = (Math.min(y + 1, height - 1) * width + x) * 4;
-          const rightLuma = (frame[rightOffset] + frame[rightOffset + 1] + frame[rightOffset + 2]) / 3;
-          const bottomLuma = (frame[bottomOffset] + frame[bottomOffset + 1] + frame[bottomOffset + 2]) / 3;
-          const edge = Math.abs(luma - rightLuma) + Math.abs(luma - bottomLuma);
-          if (edge > 95) brightEdgeSamples += 1;
-          if (luma < 38) darkRectangleSamples += 1;
-          totalSamples += 1;
-        }
-      }
-
-      if (!totalSamples) return false;
-      const edgeRatio = brightEdgeSamples / totalSamples;
-      const darkRatio = darkRectangleSamples / totalSamples;
-      return edgeRatio > 0.08 && darkRatio > 0.18;
-    }
-
-    async function loadFallbackFaceModel() {
-      if (fallbackFaceModelRef.current || fallbackFaceModelLoadingRef.current) return fallbackFaceModelRef.current;
-      fallbackFaceModelLoadingRef.current = true;
+    async function loadFaceLandmarker() {
+      if (faceLandmarkerRef.current || faceLandmarkerLoadingRef.current) return faceLandmarkerRef.current;
+      faceLandmarkerLoadingRef.current = true;
       try {
-        const [tf, blazeface] = await Promise.all([
-          import('@tensorflow/tfjs'),
-          import('@tensorflow-models/blazeface'),
-          import('@tensorflow/tfjs-backend-webgl'),
-        ]);
-        await tf.setBackend('webgl').catch(() => tf.setBackend('cpu'));
-        await tf.ready();
-        fallbackFaceModelRef.current = await blazeface.load();
+        const { FaceLandmarker, FilesetResolver } = await import('@mediapipe/tasks-vision');
+        const vision = await FilesetResolver.forVisionTasks(MEDIAPIPE_WASM_URL);
+        faceLandmarkerRef.current = await FaceLandmarker.createFromOptions(vision, {
+          baseOptions: {
+            modelAssetPath: MEDIAPIPE_FACE_MODEL_URL,
+            delegate: 'GPU',
+          },
+          runningMode: 'VIDEO',
+          numFaces: 4,
+          minFaceDetectionConfidence: Number(exam.settings.confidenceThreshold || 0.75),
+          minFacePresenceConfidence: Number(exam.settings.confidenceThreshold || 0.75),
+          minTrackingConfidence: 0.5,
+        });
         setMediaStatusIfChanged({ ai: 'ml active', face: 'checking' });
-        return fallbackFaceModelRef.current;
+        return faceLandmarkerRef.current;
       } catch {
-        setMediaStatusIfChanged({ ai: 'fallback failed', face: 'unavailable' });
+        setMediaStatusIfChanged({ ai: 'face model failed', face: 'unavailable' });
         sendProctorOnlyEvent('ai_unavailable', {
-          message: 'Browser ML face model could not be loaded for this exam session.',
+          message: 'Browser face landmark model could not be loaded for this exam session.',
           severity: 'warning',
           score: 1,
         }, 120000);
         return null;
       } finally {
-        fallbackFaceModelLoadingRef.current = false;
+        faceLandmarkerLoadingRef.current = false;
       }
     }
 
-    function normalizeFaces(faces = [], source = 'native') {
-      if (source === 'ml') {
-        return faces.map((face) => {
-          const [left = 0, top = 0] = face.topLeft || [];
-          const [right = 0, bottom = 0] = face.bottomRight || [];
-          return {
-            boundingBox: {
-              x: left,
-              y: top,
-              width: Math.max(right - left, 0),
-              height: Math.max(bottom - top, 0),
-            },
-            probability: Array.isArray(face.probability) ? face.probability[0] : face.probability,
-          };
-        }).filter((face) => Number(face.probability ?? 1) >= 0.75);
+    async function loadObjectDetector() {
+      if (objectDetectorRef.current || objectDetectorLoadingRef.current) return objectDetectorRef.current;
+      objectDetectorLoadingRef.current = true;
+      try {
+        const [tf, cocoSsd] = await Promise.all([
+          import('@tensorflow/tfjs'),
+          import('@tensorflow/tfjs-backend-webgl'),
+          import('@tensorflow-models/coco-ssd'),
+        ]);
+        await tf.setBackend('webgl').catch(() => tf.setBackend('cpu'));
+        await tf.ready();
+        objectDetectorRef.current = await cocoSsd.load({ base: 'lite_mobilenet_v2' });
+        setMediaStatusIfChanged({ object: 'checking' });
+        return objectDetectorRef.current;
+      } catch {
+        sendProctorOnlyEvent('ai_unavailable', {
+          message: 'Browser object detection model could not be loaded for this exam session.',
+          severity: 'warning',
+          score: 1,
+          metadata: { detector: 'coco-ssd' },
+        }, 120000);
+        return null;
+      } finally {
+        objectDetectorLoadingRef.current = false;
       }
-
-      return faces;
     }
 
-    function processDetectedFaces(rawFaces = [], source, video) {
-      const faces = normalizeFaces(rawFaces, source);
+    function normalizeFaceLandmarks(result, video) {
+      return (result?.faceLandmarks || []).map((landmarks) => {
+        const xs = landmarks.map((point) => point.x);
+        const ys = landmarks.map((point) => point.y);
+        const minX = Math.min(...xs);
+        const maxX = Math.max(...xs);
+        const minY = Math.min(...ys);
+        const maxY = Math.max(...ys);
+        const nose = landmarks[1] || landmarks[4] || landmarks[0];
+        const leftEye = landmarks[33];
+        const rightEye = landmarks[263];
+        const width = Math.max((maxX - minX) * video.videoWidth, 0);
+        const height = Math.max((maxY - minY) * video.videoHeight, 0);
+        const centerX = ((minX + maxX) / 2) * video.videoWidth;
+        const centerY = ((minY + maxY) / 2) * video.videoHeight;
+        const noseOffsetX = nose ? ((nose.x - minX) / Math.max(maxX - minX, 0.001)) - 0.5 : 0;
+        const noseOffsetY = nose ? ((nose.y - minY) / Math.max(maxY - minY, 0.001)) - 0.5 : 0;
+        const eyeTilt = leftEye && rightEye ? Math.abs(leftEye.y - rightEye.y) : 0;
 
+        return {
+          boundingBox: {
+            x: minX * video.videoWidth,
+            y: minY * video.videoHeight,
+            width,
+            height,
+          },
+          centerX,
+          centerY,
+          noseOffsetX,
+          noseOffsetY,
+          eyeTilt,
+        };
+      });
+    }
+
+    function processDetectedFaces(faces = [], source, video) {
       if (faces.length === 0 && exam.settings.detectNoFace) {
         if (noteStableSignal('noFace', true, 2)) {
           setMediaStatusIfChanged({ face: 'not visible' });
@@ -854,7 +1013,7 @@ export function StudentAttemptPage() {
             severity: 'warning',
             score: 2,
             metadata: { detector: source },
-          }, 30000);
+          }, 30000, video);
         }
         return;
       }
@@ -868,7 +1027,7 @@ export function StudentAttemptPage() {
             severity: 'critical',
             score: 2,
             metadata: { faces: faces.length, detector: source },
-          }, 45000);
+          }, 45000, video);
         }
         return;
       }
@@ -876,22 +1035,23 @@ export function StudentAttemptPage() {
 
       const [face] = faces;
       if (face?.boundingBox) {
-        const centerX = face.boundingBox.x + face.boundingBox.width / 2;
-        const centerY = face.boundingBox.y + face.boundingBox.height / 2;
+        const centerX = face.centerX || face.boundingBox.x + face.boundingBox.width / 2;
+        const centerY = face.centerY || face.boundingBox.y + face.boundingBox.height / 2;
         const leftBoundary = video.videoWidth * 0.25;
         const rightBoundary = video.videoWidth * 0.75;
         const topBoundary = video.videoHeight * 0.18;
         const bottomBoundary = video.videoHeight * 0.84;
+        const headTurned = Math.abs(Number(face.noseOffsetX || 0)) > 0.16 || Math.abs(Number(face.noseOffsetY || 0)) > 0.2 || Number(face.eyeTilt || 0) > 0.055;
         const offCenter =
           centerX < leftBoundary ||
           centerX > rightBoundary ||
           centerY < topBoundary ||
           centerY > bottomBoundary;
 
-        if (offCenter && exam.settings.detectLookingAway) {
+        if ((offCenter || headTurned) && exam.settings.detectLookingAway) {
           if (noteStableSignal('lookingAway', true, 3)) {
-            const horizontalDirection = centerX < leftBoundary ? 'left' : centerX > rightBoundary ? 'right' : 'center';
-            const verticalDirection = centerY < topBoundary ? 'up' : centerY > bottomBoundary ? 'down' : 'center';
+            const horizontalDirection = centerX < leftBoundary || Number(face.noseOffsetX || 0) < -0.16 ? 'left' : centerX > rightBoundary || Number(face.noseOffsetX || 0) > 0.16 ? 'right' : 'center';
+            const verticalDirection = centerY < topBoundary || Number(face.noseOffsetY || 0) < -0.2 ? 'up' : centerY > bottomBoundary || Number(face.noseOffsetY || 0) > 0.2 ? 'down' : 'center';
             setMediaStatusIfChanged({ face: horizontalDirection !== 'center' ? `looking ${horizontalDirection}` : `looking ${verticalDirection}` });
             sendProctorOnlyEvent('ai_looking_away', {
               message: 'Face/eye direction suggests the student may be looking away from the exam.',
@@ -903,8 +1063,10 @@ export function StudentAttemptPage() {
                 centerY: Math.round(centerY),
                 horizontalDirection,
                 verticalDirection,
+                noseOffsetX: Number(face.noseOffsetX || 0).toFixed(3),
+                noseOffsetY: Number(face.noseOffsetY || 0).toFixed(3),
               },
-            }, 45000);
+            }, 45000, video);
           }
         } else {
           noteStableSignal('lookingAway', false, 2);
@@ -912,6 +1074,53 @@ export function StudentAttemptPage() {
             setMediaStatusIfChanged({ face: 'visible' });
           }
         }
+      }
+    }
+
+    function processDetectedObjects(predictions = [], video = null) {
+      const confidenceThreshold = Number(exam.settings.confidenceThreshold || 0.75);
+      const phones = predictions.filter((item) => item.class === 'cell phone' && Number(item.score || 0) >= confidenceThreshold);
+      const people = predictions.filter((item) => item.class === 'person' && Number(item.score || 0) >= Math.max(confidenceThreshold - 0.1, 0.55));
+
+      if (phones.length > 0 && exam.settings.detectMobilePhone) {
+        if (noteStableSignal('mobileObject', true, 2)) {
+          setMediaStatusIfChanged({ object: 'mobile phone' });
+          sendProctorOnlyEvent('ai_mobile_detected', {
+            message: 'Mobile phone detected in camera frame.',
+            severity: 'critical',
+            score: 2,
+            metadata: {
+              detector: 'coco-ssd',
+              count: phones.length,
+              confidence: Number(phones[0].score || 0).toFixed(3),
+              bbox: phones[0].bbox?.map((value) => Math.round(value)),
+            },
+          }, 60000, video);
+        }
+      } else {
+        noteStableSignal('mobileObject', false, 2);
+      }
+
+      if (people.length > 1 && exam.settings.detectMultiplePersons) {
+        if (noteStableSignal('multiplePersons', true, 2)) {
+          setMediaStatusIfChanged({ object: 'multiple people' });
+          sendProctorOnlyEvent('ai_multiple_faces', {
+            message: 'Multiple people detected in camera frame.',
+            severity: 'critical',
+            score: 2,
+            metadata: {
+              detector: 'coco-ssd',
+              people: people.length,
+              confidence: Number(people[0].score || 0).toFixed(3),
+            },
+          }, 45000, video);
+        }
+      } else {
+        noteStableSignal('multiplePersons', false, 2);
+      }
+
+      if (hasStableClearSignal('mobileObject', 2) && hasStableClearSignal('multiplePersons', 2)) {
+        setMediaStatusIfChanged({ object: 'clear' });
       }
     }
 
@@ -928,6 +1137,7 @@ export function StudentAttemptPage() {
         }
 
         mediaStreamRef.current = stream;
+        startExamRecording(stream);
         stream.getVideoTracks().forEach((track) => {
           const reportCameraMissing = () => {
             setMediaStatusIfChanged({ camera: 'missing', movement: 'unknown', face: 'blocked' });
@@ -974,19 +1184,13 @@ export function StudentAttemptPage() {
           canvas.height = 72;
           movementCanvasRef.current = canvas;
           const context = canvas.getContext('2d', { willReadFrequently: true });
-          const NativeFaceDetector = window.FaceDetector;
-          const faceDetector =
-            exam.settings.aiProctoringEnabled && NativeFaceDetector
-              ? new NativeFaceDetector({ fastMode: true, maxDetectedFaces: 4 })
-              : null;
 
-          if (exam.settings.aiProctoringEnabled && !faceDetector) {
-            setMediaStatusIfChanged({ ai: 'loading ml', face: 'checking' });
-            sendProctorOnlyEvent('ai_unavailable', {
-              message: 'Native face detection is unavailable; browser ML face model fallback is being used.',
-              severity: 'info',
-            }, 120000);
-            loadFallbackFaceModel();
+          if (exam.settings.aiProctoringEnabled) {
+            setMediaStatusIfChanged({ ai: 'loading ml', face: 'checking', object: 'checking' });
+            loadFaceLandmarker();
+            if (exam.settings.detectMobilePhone || exam.settings.detectMultiplePersons) {
+              loadObjectDetector();
+            }
           }
 
           movementInterval = window.setInterval(() => {
@@ -1018,27 +1222,10 @@ export function StudentAttemptPage() {
                   severity: 'warning',
                   score: 2,
                   metadata: { avgLuma: Math.round(avgLuma), contrast: Math.round(contrast) },
-                }, 60000);
+                }, 60000, video);
               }
             } else {
               noteStableSignal('blockedCamera', false, 2);
-            }
-
-            if (exam.settings.aiProctoringEnabled && detectPossibleMobileObject(frame, canvas.width, canvas.height)) {
-              if (noteStableSignal('mobileObject', true, 4)) {
-                setMediaStatusIfChanged({ object: 'possible mobile' });
-                sendProctorOnlyEvent('ai_mobile_detected', {
-                  message: 'Possible mobile/device-like object detected near the camera frame.',
-                  severity: 'warning',
-                  score: 1,
-                  metadata: { source: 'browser-frame-heuristic' },
-                }, 60000);
-              }
-            } else {
-              noteStableSignal('mobileObject', false, 3);
-              if (hasStableClearSignal('mobileObject', 3)) {
-                setMediaStatusIfChanged({ object: 'clear' });
-              }
             }
 
             if (lastFrameRef.current) {
@@ -1057,7 +1244,7 @@ export function StudentAttemptPage() {
                     severity: 'warning',
                     score: 1,
                     metadata: { movementScore: Math.round(movementScore) },
-                  }, 45000);
+                  }, 45000, video);
                 }
               } else {
                 mediaIncidentRef.current.movementHighFrames = 0;
@@ -1069,20 +1256,30 @@ export function StudentAttemptPage() {
 
             if (exam.settings.aiProctoringEnabled && !faceDetectingRef.current) {
               faceDetectingRef.current = true;
-              const detectionPromise = faceDetector
-                ? faceDetector.detect(video).then((faces) => processDetectedFaces(faces, 'native', video))
-                : Promise.resolve(fallbackFaceModelRef.current || loadFallbackFaceModel())
-                    .then((model) => {
-                      if (!model) return;
-                      return model.estimateFaces(video, false);
-                    })
-                    .then((faces) => {
-                      if (Array.isArray(faces)) processDetectedFaces(faces, 'ml', video);
-                    });
+              const detectionPromise = Promise.all([
+                Promise.resolve(faceLandmarkerRef.current || loadFaceLandmarker())
+                  .then((model) => {
+                    if (!model) return null;
+                    return model.detectForVideo(video, window.performance.now());
+                  })
+                  .then((result) => {
+                    if (result) processDetectedFaces(normalizeFaceLandmarks(result, video), 'mediapipe-face-landmarker', video);
+                  }),
+                exam.settings.detectMobilePhone || exam.settings.detectMultiplePersons
+                  ? Promise.resolve(objectDetectorRef.current || loadObjectDetector())
+                      .then((model) => {
+                        if (!model) return null;
+                        return model.detect(video);
+                      })
+                      .then((predictions) => {
+                        if (Array.isArray(predictions)) processDetectedObjects(predictions, video);
+                      })
+                  : Promise.resolve(),
+              ]);
 
               detectionPromise
                 .catch(() => {
-                  setMediaStatusIfChanged({ ai: faceDetector ? 'fallback' : 'ml retrying' });
+                  setMediaStatusIfChanged({ ai: 'ml retrying' });
                 })
                 .finally(() => {
                   faceDetectingRef.current = false;
@@ -1145,12 +1342,13 @@ export function StudentAttemptPage() {
       if (noiseInterval) window.clearInterval(noiseInterval);
       if (audioContext) audioContext.close().catch(() => {});
       if (mediaStreamRef.current) {
+        stopAndUploadExamRecording('closed').catch(() => {});
         mediaStreamRef.current.getTracks().forEach((track) => track.stop());
       }
       mediaStreamRef.current = null;
       lastFrameRef.current = null;
     };
-  }, [exam, sendSecurityEvent]);
+  }, [assignmentId, exam, sendSecurityEvent, startExamRecording, stopAndUploadExamRecording]);
 
   function scheduleSave(question, answerPatch) {
     const questionId = question.id;
@@ -1222,15 +1420,16 @@ export function StudentAttemptPage() {
         })),
       });
       setSaveState('Saved');
+      await stopAndUploadExamRecording('submitted');
       await api.post(`/student/exams/${assignmentId}/submit`);
       navigate('/student/exams', { replace: true });
     } catch (requestError) {
-      setError(requestError.response?.data?.message || 'Unable to submit assessment.');
+      setError(requestError.response?.data?.message || requestError.message || 'Unable to submit assessment.');
     } finally {
       setIsSubmitting(false);
       setIsSubmitOpen(false);
     }
-  }, [answers, assignmentId, navigate, questions]);
+  }, [answers, assignmentId, navigate, questions, stopAndUploadExamRecording]);
 
   function sendProctorChat(event) {
     event.preventDefault();
