@@ -8,8 +8,8 @@ const FRAME_COUNT = 44;
 const DESKTOP_SEQUENCE_SCROLL_VH = 1.2;
 const DESKTOP_HANDOFF_SCROLL_VH = 1;
 const CRITICAL_FRAME_INDEXES = [0, 10, 21, 32, 43];
-const DESKTOP_FRAME_BATCH_SIZE = 3;
-const MOBILE_FRAME_BATCH_SIZE = 2;
+const DESKTOP_FRAME_BATCH_SIZE = 2;
+const MOBILE_FRAME_BATCH_SIZE = 1;
 const statusStates = [
   'Exam Ready',
   'AI Proctoring Active',
@@ -62,33 +62,11 @@ function getNearestReadyFrame(images, targetIndex, lastDrawnIndex) {
   return isFrameReady(images[0]) ? 0 : -1;
 }
 
-function removeWhiteFrameBackground(image) {
-  const width = image.naturalWidth || image.width;
-  const height = image.naturalHeight || image.height;
-  const buffer = document.createElement('canvas');
-  buffer.width = width;
-  buffer.height = height;
-  const bufferContext = buffer.getContext('2d', { willReadFrequently: true });
-  if (!bufferContext) return image;
-
-  bufferContext.drawImage(image, 0, 0);
-  const imageData = bufferContext.getImageData(0, 0, width, height);
-  const { data } = imageData;
-
-  for (let index = 0; index < data.length; index += 4) {
-    const red = data[index];
-    const green = data[index + 1];
-    const blue = data[index + 2];
-    if (red > 248 && green > 248 && blue > 248) {
-      data[index + 3] = 0;
-    }
-  }
-
-  bufferContext.putImageData(imageData, 0, 0);
-  buffer.__elvoraReady = true;
-  buffer.__elvoraWidth = width;
-  buffer.__elvoraHeight = height;
-  return buffer;
+function markFrameReady(image) {
+  image.__elvoraReady = true;
+  image.__elvoraWidth = getFrameWidth(image);
+  image.__elvoraHeight = getFrameHeight(image);
+  return image;
 }
 
 function drawContain(context, image, width, height) {
@@ -130,16 +108,16 @@ export function ElvoraSequence() {
 
     let cancelled = false;
     let rafId = 0;
+    let drawRafId = 0;
     let canvasWidth = 1;
     let canvasHeight = 1;
     const completedFrames = new Set();
     const idleTasks = new Set();
 
-    const drawFrame = (requestedIndex) => {
+    const renderFrame = () => {
+      drawRafId = 0;
       if (cancelled) return;
-      const clampedIndex = Math.max(0, Math.min(FRAME_COUNT - 1, requestedIndex));
-      requestedFrameRef.current = clampedIndex;
-      const resolvedIndex = getNearestReadyFrame(imagesRef.current, clampedIndex, lastDrawnFrameRef.current);
+      const resolvedIndex = getNearestReadyFrame(imagesRef.current, requestedFrameRef.current, lastDrawnFrameRef.current);
       if (resolvedIndex < 0 || resolvedIndex === lastDrawnFrameRef.current) return;
 
       const image = imagesRef.current[resolvedIndex];
@@ -147,6 +125,13 @@ export function ElvoraSequence() {
       drawContain(context, image, canvasWidth, canvasHeight);
       canvas.dataset.frameIndex = String(resolvedIndex + 1);
       lastDrawnFrameRef.current = resolvedIndex;
+    };
+
+    const drawFrame = (requestedIndex) => {
+      if (cancelled) return;
+      requestedFrameRef.current = Math.max(0, Math.min(FRAME_COUNT - 1, requestedIndex));
+      if (drawRafId) return;
+      drawRafId = window.requestAnimationFrame(renderFrame);
     };
 
     const resizeCanvas = () => {
@@ -170,7 +155,7 @@ export function ElvoraSequence() {
       if (cancelled) return;
       const loaded = completedFrames.size;
       canvas.dataset.loadedFrames = String(loaded);
-      if (force || loaded === 1 || loaded % 4 === 0 || loaded === FRAME_COUNT) {
+      if (force || loaded === 1 || loaded % 6 === 0 || loaded === FRAME_COUNT) {
         setFrameLoadState({ ready: isFrameReady(imagesRef.current[0]), loaded });
       }
     };
@@ -220,7 +205,7 @@ export function ElvoraSequence() {
         } catch {
           // Decoding can fail after onload in some browsers; the loaded bitmap is still usable.
         }
-        imagesRef.current[index] = removeWhiteFrameBackground(image);
+        imagesRef.current[index] = markFrameReady(image);
         completedFrames.add(index);
         publishFrameLoadState(index === 0);
         if (!cancelled && index === 0) resizeCanvas();
@@ -248,7 +233,7 @@ export function ElvoraSequence() {
       loadingFrameBatch = false;
       if (cancelled) return;
       drawFrame(requestedFrameRef.current);
-      if (frameQueue.length) scheduleIdleTask(loadNextFrameBatch, 1000);
+      if (frameQueue.length) scheduleIdleTask(loadNextFrameBatch, 900);
     };
 
     const resizeObserver = new window.ResizeObserver(() => {
@@ -268,6 +253,7 @@ export function ElvoraSequence() {
     return () => {
       cancelled = true;
       window.cancelAnimationFrame(rafId);
+      window.cancelAnimationFrame(drawRafId);
       cancelIdleTasks();
       resizeObserver.disconnect();
       delete canvas.__elvoraDrawFrame;
@@ -381,11 +367,14 @@ export function ElvoraSequence() {
       applyProgress(0);
       setDefaultPointer();
 
-      gsap.timeline({ defaults: { ease: 'power3.out' } })
-        .from('.landing-header', { opacity: 0, y: -16, duration: 0.55 }, 0)
-        .from('[data-hero-copy-item]', { opacity: 0, y: 24, duration: 0.78, stagger: 0.1 }, 0.08)
-        .from(imageWrapRef.current, { scale: 0.965, x: 22, duration: 0.95 }, 0.18)
-        .from(liquidField, { x: -12, duration: 0.9 }, 0.12);
+      const introTimeline = gsap.timeline({ defaults: { ease: 'power3.out' } });
+      const headerElement = document.querySelector('.landing-header');
+      const copyItems = gsap.utils.toArray('[data-hero-copy-item]');
+
+      if (headerElement) introTimeline.from(headerElement, { opacity: 0, y: -16, duration: 0.55 }, 0);
+      if (copyItems.length) introTimeline.from(copyItems, { opacity: 0, y: 24, duration: 0.78, stagger: 0.1 }, 0.08);
+      if (imageWrapRef.current) introTimeline.from(imageWrapRef.current, { scale: 0.965, x: 22, duration: 0.95 }, 0.18);
+      if (liquidField) introTimeline.from(liquidField, { x: -12, duration: 0.9 }, 0.12);
 
       mm.add('(min-width: 1024px) and (prefers-reduced-motion: no-preference)', () => {
         let lenisRafId = 0;
@@ -442,14 +431,12 @@ export function ElvoraSequence() {
             x: -20,
             y: 30,
             rotate: -8,
-            filter: 'blur(35px)',
           }, {
             opacity: 0.28,
             scale: 1.18,
             x: 28,
             y: -42,
             rotate: 7,
-            filter: 'blur(60px)',
             ease: 'none',
           }, 0)
           .fromTo(liquidField, {
@@ -521,7 +508,7 @@ export function ElvoraSequence() {
     <section
       ref={sectionRef}
       id="elvora-hero"
-      className="relative isolate min-h-screen overflow-x-clip bg-white lg:h-[320svh]"
+      className="relative isolate min-h-screen overflow-x-clip bg-[#fffdf9] lg:h-[320svh]"
       aria-labelledby="elvora-title"
       style={{ '--mx': '28%', '--my': '45%', '--liquid-active': '0', '--wave-shift': '0px', '--wave-shift-neg': '0px', '--wave-shift-soft': '0px' }}
     >
@@ -543,12 +530,12 @@ export function ElvoraSequence() {
             background:
               radial-gradient(
                 620px circle at var(--mx) var(--my),
-                rgba(255, 122, 0, calc(0.18 + (var(--liquid-active) * 0.10))),
-                rgba(255, 153, 51, 0.14) 28%,
+                rgba(255, 122, 0, calc(0.11 + (var(--liquid-active) * 0.04))),
+                rgba(255, 153, 51, 0.08) 30%,
                 rgba(255, 255, 255, 0) 64%
               );
-            opacity: 0.95;
-            filter: blur(18px);
+            opacity: 0.78;
+            filter: blur(24px);
             transform: translateZ(0);
           }
 
@@ -561,12 +548,12 @@ export function ElvoraSequence() {
             background:
               radial-gradient(
                 ellipse at 20% 46%,
-                rgba(255, 122, 0, 0.24),
-                rgba(255, 153, 51, 0.12) 38%,
+                rgba(255, 122, 0, 0.18),
+                rgba(255, 153, 51, 0.09) 38%,
                 transparent 74%
               );
             filter: blur(34px);
-            opacity: 0.9;
+            opacity: 0.72;
             transform: translate3d(calc(var(--wave-shift-soft) * -0.2), 0, 0);
           }
 
@@ -730,13 +717,13 @@ export function ElvoraSequence() {
             z-index: 2;
             pointer-events: none;
             overflow: hidden;
-            opacity: calc(0.16 + (var(--visual-liquid-active, 0) * 0.22));
+            opacity: calc(0.07 + (var(--visual-liquid-active, 0) * 0.08));
             mix-blend-mode: multiply;
             background:
               radial-gradient(
                 420px circle at var(--vmx, 18%) var(--vmy, 48%),
-                rgba(255, 122, 0, 0.08),
-                rgba(255, 153, 51, 0.035) 34%,
+                rgba(255, 122, 0, 0.055),
+                rgba(255, 153, 51, 0.024) 34%,
                 transparent 68%
               );
             -webkit-mask-image:
@@ -765,14 +752,14 @@ export function ElvoraSequence() {
             left: calc(-8% + (var(--i) * 5.8%));
             width: var(--w);
             height: 128%;
-            border-right: 1.6px solid rgba(255, 122, 0, 0.18);
+            border-right: 1.4px solid rgba(255, 122, 0, 0.12);
             border-top-right-radius: 74% 48%;
             border-bottom-right-radius: 74% 48%;
             opacity: 0;
             animation: elvora-visual-liquid-line 6.8s ease-in-out infinite;
             animation-delay: var(--delay);
             transform-origin: center;
-            box-shadow: 8px 0 22px rgba(255, 122, 0, 0.08);
+            box-shadow: 8px 0 20px rgba(255, 122, 0, 0.045);
           }
 
           .hero-visual-liquid-overlay span:nth-child(3n) {
@@ -805,7 +792,7 @@ export function ElvoraSequence() {
 
           @media (max-width: 1023px), (prefers-reduced-motion: reduce) {
             .hero-visual-liquid-overlay {
-              opacity: 0.16;
+              opacity: 0.08;
               mix-blend-mode: multiply;
               -webkit-mask-image: linear-gradient(90deg, rgba(0,0,0,0.8), rgba(0,0,0,0.36), transparent);
               mask-image: linear-gradient(90deg, rgba(0,0,0,0.8), rgba(0,0,0,0.36), transparent);
@@ -820,7 +807,7 @@ export function ElvoraSequence() {
           }
         `}
       </style>
-      <div ref={heroStageRef} className="relative flex min-h-screen items-center bg-white pb-16 pt-28 will-change-[opacity,transform] lg:sticky lg:top-0 lg:h-screen lg:pb-0 lg:pt-24">
+      <div ref={heroStageRef} className="relative flex min-h-screen items-center bg-[linear-gradient(90deg,#fff7ed_0%,#fffdf9_38%,#fffdf9_100%)] pb-16 pt-28 will-change-[opacity,transform] lg:sticky lg:top-0 lg:h-screen lg:pb-0 lg:pt-20">
         <div
           ref={liquidFieldRef}
           className="hero-liquid-bg"
@@ -828,7 +815,7 @@ export function ElvoraSequence() {
         >
           <div className="hero-liquid-glow" />
           <div className="hero-liquid-lines hero-liquid-lines-left">
-            {Array.from({ length: 28 }).map((_, index) => (
+            {Array.from({ length: 18 }).map((_, index) => (
               <span
                 key={index}
                 style={{
@@ -840,7 +827,7 @@ export function ElvoraSequence() {
             ))}
           </div>
           <div className="hero-liquid-lines hero-liquid-lines-right">
-            {Array.from({ length: 18 }).map((_, index) => (
+            {Array.from({ length: 10 }).map((_, index) => (
               <span
                 key={index}
                 style={{
@@ -893,13 +880,14 @@ export function ElvoraSequence() {
             ref={imageWrapRef}
             data-hero-visual
             style={{ '--vmx': '18%', '--vmy': '48%', '--visual-liquid-active': '0' }}
-            className="relative z-10 mx-auto w-full max-w-[760px] overflow-visible lg:ml-auto lg:mr-0"
+            className="group/visual relative z-10 mx-auto w-full max-w-[760px] overflow-visible transition-transform duration-500 ease-out hover:-translate-y-1 hover:scale-[1.008] motion-reduce:transition-none lg:ml-auto lg:mr-0"
           >
-            <div className="relative aspect-[16/9] w-full origin-center overflow-visible bg-transparent lg:scale-[1.16] xl:scale-[1.2]">
+            <div className="relative aspect-[16/9] w-full origin-center overflow-visible bg-transparent lg:scale-[1.12] xl:scale-[1.16]">
+              <span className="pointer-events-none absolute -inset-[8%] z-0 hidden rounded-full bg-[radial-gradient(ellipse_at_68%_56%,rgba(255,255,255,0.9)_0%,rgba(255,251,246,0.48)_50%,rgba(255,244,232,0.16)_72%,transparent_88%)] opacity-70 blur-2xl lg:block" aria-hidden="true" />
               <canvas
                 ref={canvasRef}
                 data-hero-canvas
-                className="relative z-[1] block h-full w-full select-none bg-transparent object-contain"
+                className="relative z-[1] block h-full w-full select-none bg-transparent object-contain mix-blend-multiply [-webkit-mask-image:radial-gradient(ellipse_76%_72%_at_66%_54%,black_0%,black_58%,rgba(0,0,0,0.76)_70%,transparent_88%)] [mask-image:radial-gradient(ellipse_76%_72%_at_66%_54%,black_0%,black_58%,rgba(0,0,0,0.76)_70%,transparent_88%)]"
                 role="img"
                 aria-label="Elvora animated online examination platform interface"
               />
@@ -920,7 +908,7 @@ export function ElvoraSequence() {
                 </div>
               </div>
               <div className="hero-visual-liquid-overlay" aria-hidden="true">
-                {Array.from({ length: 16 }).map((_, index) => (
+                {Array.from({ length: 10 }).map((_, index) => (
                   <span
                     key={index}
                     style={{

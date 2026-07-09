@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef } from 'react';
+import { useEffect, useRef } from 'react';
 import { gsap } from 'gsap';
 import { ScrollTrigger } from 'gsap/ScrollTrigger';
 import { ecosystemStateRanges, ecosystemSteps } from './ecosystemData.js';
@@ -41,7 +41,7 @@ const desktopGridClass = [
 ].join(' ');
 
 const cardPanelClass = [
-  'group relative z-[7] w-full max-w-[330px] rounded-[6px] border border-black/[0.10] bg-white/52 px-5 py-4',
+  'group relative z-[7] w-full max-w-[330px] rounded-[6px] border border-black/[0.10] bg-white/52 px-5 py-4 opacity-0 motion-reduce:opacity-100',
   'backdrop-blur-[3px] will-change-[opacity,transform] transition-none',
   '[&.is-active]:border-[#F36B16]/34 [&.is-active]:bg-white/72 [&.is-active]:shadow-[0_20px_50px_rgba(24,24,24,0.075)]',
   '[&.is-unified]:border-black/[0.10] [&.is-unified]:bg-white/62',
@@ -286,18 +286,11 @@ function NetworkCluster({ className = '', mirrored = false }) {
             strokeWidth={index % 2 ? 1 : 1.25}
             strokeLinecap="round"
             strokeDasharray={index % 2 ? '4 12' : '2 10'}
-          >
-            <animate
-              attributeName="stroke-dashoffset"
-              values="0;-90"
-              dur={`${11 + index * 1.4}s`}
-              repeatCount="indefinite"
-            />
-          </path>
+          />
         ))}
         {networkNodes.map(([cx, cy, radius, duration]) => (
           <circle
-            key={`${cx}-${cy}`}
+            key={`${cx}-${cy}-${duration}`}
             cx={cx}
             cy={cy}
             r={radius}
@@ -305,9 +298,7 @@ function NetworkCluster({ className = '', mirrored = false }) {
             fillOpacity="0.38"
             stroke="#FFF7EF"
             strokeWidth="1.4"
-          >
-            <animate attributeName="opacity" values="0.38;0.95;0.38" dur={`${duration}s`} repeatCount="indefinite" />
-          </circle>
+          />
         ))}
       </svg>
     </div>
@@ -338,7 +329,7 @@ export function EcosystemSection() {
   const sectionRef = useRef(null);
   const activeStateRef = useRef('intro');
 
-  useLayoutEffect(() => {
+  useEffect(() => {
     const section = sectionRef.current;
     if (!section) return undefined;
 
@@ -912,6 +903,7 @@ export function EcosystemSection() {
         '[@media(max-height:760px)_and_(min-width:901px)]:min-h-[540svh]',
       ].join(' ')}
       aria-labelledby="elvora-ecosystem-title"
+      data-ecosystem-section
       data-ecosystem-state="intro"
     >
       <div
@@ -919,13 +911,13 @@ export function EcosystemSection() {
         className="pointer-events-none absolute inset-0 -z-10 bg-[linear-gradient(180deg,rgba(252,250,247,0.96),rgba(252,250,247,0.88)_12%,rgba(252,250,247,0.88)_88%,rgba(252,250,247,0.96)),radial-gradient(circle_at_50%_58%,rgba(243,107,22,0.06),transparent_42%)]"
       />
 
-      <div className="relative z-10 sticky top-[var(--elvora-nav-height)] h-[calc(100svh-var(--elvora-nav-height))] overflow-clip motion-reduce:relative motion-reduce:top-0 motion-reduce:h-auto">
+      <div className="relative z-10 sticky top-[var(--elvora-nav-height)] h-[calc(100svh_-_var(--elvora-nav-height))] overflow-clip motion-reduce:relative motion-reduce:top-0 motion-reduce:h-auto">
         <EcosystemNetworkBackdrop />
-        <div className="relative z-10 mx-auto flex h-full w-[min(100%-24px,760px)] flex-col xl:w-[min(100%-48px,1500px)] min-[901px]:w-[min(100%-32px,1220px)]">
+        <div className="relative z-10 mx-auto flex h-full w-[min(calc(100%_-_24px),760px)] flex-col xl:w-[min(calc(100%_-_48px),1500px)] min-[901px]:w-[min(calc(100%_-_32px),1220px)]">
           <EcosystemHeader />
 
           <div
-            className="relative mx-auto h-[min(82svh,820px)] min-h-[650px] w-full max-w-[1500px] overflow-visible max-[900px]:h-auto max-[900px]:min-h-0 [@media(max-height:850px)_and_(min-width:901px)]:h-[calc(100svh-var(--elvora-nav-height)-94px)] [@media(max-height:850px)_and_(min-width:901px)]:min-h-0 [@media(max-height:760px)_and_(min-width:901px)]:h-[calc(100svh-var(--elvora-nav-height)-78px)]"
+            className="relative mx-auto h-[min(82svh,820px)] min-h-[650px] w-full max-w-[1500px] overflow-visible max-[900px]:h-auto max-[900px]:min-h-0 [@media(max-height:850px)_and_(min-width:901px)]:h-[calc(100svh_-_var(--elvora-nav-height)_-_94px)] [@media(max-height:850px)_and_(min-width:901px)]:min-h-0 [@media(max-height:760px)_and_(min-width:901px)]:h-[calc(100svh_-_var(--elvora-nav-height)_-_78px)]"
             data-ecosystem-composition
           >
             <EcosystemConnectors />
