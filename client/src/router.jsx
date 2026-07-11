@@ -2,7 +2,7 @@ import { lazy, Suspense } from 'react';
 import { createBrowserRouter, Navigate, useLocation, useParams } from 'react-router-dom';
 import { ProtectedRoute } from './features/auth/ProtectedRoute.jsx';
 import { AppShell } from './ui/AppShell.jsx';
-import { BrandLoader } from './ui/BrandLoader.jsx';
+import { RouteSkeleton } from './ui/RouteSkeleton.jsx';
 
 function lazyPage(importer, exportName) {
   return lazy(() => importer().then((module) => ({ default: module[exportName] })));
@@ -10,7 +10,7 @@ function lazyPage(importer, exportName) {
 
 function page(Component, props) {
   return (
-    <Suspense fallback={<BrandLoader />}>
+    <Suspense fallback={<RouteSkeleton />}>
       <Component {...props} />
     </Suspense>
   );

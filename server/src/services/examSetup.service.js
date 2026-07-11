@@ -6,7 +6,9 @@ function needsCamera(settings = {}) {
 }
 
 function needsMicrophone(settings = {}) {
-  return Boolean(settings.microphoneRequired || settings.noiseMonitoring || settings.proctoringEnabled);
+  // Whole-attempt evidence always includes microphone audio. Assessment
+  // settings only control audio analysis and enforcement rules.
+  return true;
 }
 
 function getRequiredSetupSteps(assessment = {}) {

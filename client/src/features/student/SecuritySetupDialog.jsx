@@ -15,6 +15,7 @@ import {
   LockKeyhole,
   MapPin,
   Maximize,
+  Mic,
   MonitorCheck,
   Navigation,
   RefreshCw,
@@ -45,9 +46,10 @@ const SECURITY_PHASES = [
 
 const INITIAL_ENVIRONMENT_CHECKS = [
   { key: 'session', label: 'Secure browser session', detail: 'Waiting to check', status: 'idle', icon: LockKeyhole },
+  { key: 'privacy', label: 'Private-mode protection', detail: 'Waiting to check', status: 'idle', icon: ShieldCheck },
   { key: 'connection', label: 'Internet and server speed', detail: 'Waiting to check', status: 'idle', icon: Wifi },
   { key: 'integrity', label: 'Exam window integrity', detail: 'Waiting to check', status: 'idle', icon: MonitorCheck },
-  { key: 'permissions', label: 'Required device access', detail: 'Waiting to check', status: 'idle', icon: Camera },
+  { key: 'permissions', label: 'Microphone and device access', detail: 'Waiting to check', status: 'idle', icon: Mic },
 ];
 
 const IDENTITY_STAGE_ERRORS = {
@@ -86,6 +88,7 @@ const IDENTITY_STAGE_ERRORS = {
 };
 
 let faceApiLoadPromise = null;
+let faceMatchingModelsPromise = null;
 let ssdFaceDetectorLoadPromise = null;
 let ocrLoadPromise = null;
 let ocrWorkerPromise = null;
@@ -165,11 +168,7 @@ async function loadFaceApi() {
       .then(async (module) => {
         const faceapi = module.default || module;
         await faceapi.tf.ready();
-        await Promise.all([
-          faceapi.nets.tinyFaceDetector.loadFromUri(FACE_API_MODEL_URL),
-          faceapi.nets.faceLandmark68Net.loadFromUri(FACE_API_MODEL_URL),
-          faceapi.nets.faceRecognitionNet.loadFromUri(FACE_API_MODEL_URL),
-        ]);
+        await faceapi.nets.tinyFaceDetector.loadFromUri(FACE_API_MODEL_URL);
         return faceapi;
       })
       .catch((error) => {
@@ -181,6 +180,20 @@ async function loadFaceApi() {
       });
   }
   return faceApiLoadPromise;
+}
+
+async function loadFaceMatchingModels(faceapi) {
+  if (faceapi.nets.faceLandmark68Net.isLoaded && faceapi.nets.faceRecognitionNet.isLoaded) return;
+  if (!faceMatchingModelsPromise) {
+    faceMatchingModelsPromise = Promise.all([
+      faceapi.nets.faceLandmark68Net.loadFromUri(FACE_API_MODEL_URL),
+      faceapi.nets.faceRecognitionNet.loadFromUri(FACE_API_MODEL_URL),
+    ]).catch((error) => {
+      faceMatchingModelsPromise = null;
+      throw error;
+    });
+  }
+  await faceMatchingModelsPromise;
 }
 
 async function loadSsdFaceDetector(faceapi) {
@@ -307,6 +320,7 @@ async function runFaceDetection(faceapi, image, options) {
 }
 
 async function detectFaceDescriptor(faceapi, dataUrl, imageKind) {
+  await loadFaceMatchingModels(faceapi);
   const image = await dataUrlToImage(dataUrl);
   if (!image.width || !image.height) throw new Error('The selected image has invalid dimensions. Choose another image.');
 
@@ -355,7 +369,25 @@ async function detectFaceDescriptor(faceapi, dataUrl, imageKind) {
     descriptor,
     faceHeightRatio: box.height / image.height,
     faceWidthRatio: box.width / image.width,
+    faceCenterXRatio: (box.x + box.width / 2) / image.width,
+    faceCenterYRatio: (box.y + box.height / 2) / image.height,
     detectionScore: Number(detection.detection.score || 0),
+  };
+}
+
+async function detectLiveFace(faceapi, dataUrl) {
+  const image = await dataUrlToImage(dataUrl);
+  const detection = await faceapi.detectSingleFace(
+    image,
+    new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.35 })
+  );
+  if (!detection?.box) throw new Error('No face detected. Move your face inside the circle and use clear lighting.');
+  const box = detection.box;
+  return {
+    faceHeightRatio: box.height / image.height,
+    faceCenterXRatio: (box.x + box.width / 2) / image.width,
+    faceCenterYRatio: (box.y + box.height / 2) / image.height,
+    detectionScore: Number(detection.score || 0),
   };
 }
 
@@ -397,10 +429,9 @@ async function queryPermissionState(name) {
   }
 }
 
-async function hasDuplicateExamTab(assignmentId) {
+async function hasDuplicateExamTab(assignmentId, instanceId) {
   if (typeof window.BroadcastChannel === 'undefined') return false;
   const channel = new window.BroadcastChannel(`evalora-exam-${assignmentId}`);
-  const instanceId = `setup-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   let duplicate = false;
   channel.onmessage = (event) => {
     if (event.data?.instanceId && event.data.instanceId !== instanceId) duplicate = true;
@@ -424,20 +455,60 @@ async function probeNetwork() {
   const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
   const effectiveType = connection?.effectiveType || 'unknown';
   const downlink = Number(connection?.downlink || 0);
+  const downloadStartedAt = window.performance.now();
+  const downloadResponse = await api.get('/health/download-probe', {
+    params: { probe: Date.now() },
+    responseType: 'arraybuffer',
+  });
+  const downloadMs = Math.max(window.performance.now() - downloadStartedAt, 1);
+  const downloadedBytes = Number(downloadResponse.data?.byteLength || 0);
+  const measuredMbps = Number((((downloadedBytes * 8) / downloadMs) / 1000).toFixed(2));
 
   if (latency > MAX_NETWORK_LATENCY_MS) {
     throw new Error(`The server response is too slow (${latency} ms). Use a more stable connection.`);
   }
-  if (effectiveType === 'slow-2g' || (downlink > 0 && downlink < MIN_NETWORK_DOWNLINK_MBPS)) {
+  if (effectiveType === 'slow-2g' || measuredMbps < MIN_NETWORK_DOWNLINK_MBPS) {
     throw new Error('The available internet speed is too low for a stable exam. Switch networks and retry.');
   }
 
-  return { latency, effectiveType, downlink };
+  return { latency, effectiveType, downlink, measuredMbps };
+}
+
+async function inspectPrivateModeSignals() {
+  if (!window.indexedDB) throw new Error('IndexedDB is unavailable. Private browsing or strict privacy blocking may be active.');
+  const estimate = await navigator.storage?.estimate?.().catch(() => null);
+  const quotaMb = estimate?.quota ? Math.round(estimate.quota / (1024 * 1024)) : 0;
+  const chromium = /Chrome|Chromium|Edg\//.test(navigator.userAgent) && !/OPR\//.test(navigator.userAgent);
+  // Chromium private sessions commonly expose a small temporary quota. This
+  // is treated as a security signal only when it is exceptionally low.
+  if (chromium && quotaMb > 0 && quotaMb < 120) {
+    throw new Error('Private or incognito browsing was detected. Reopen Evalora in a normal browser window.');
+  }
+  return { quotaMb };
+}
+
+async function verifyMicrophone() {
+  if (!navigator.mediaDevices?.getUserMedia) throw new Error('Microphone access is unavailable in this browser.');
+  const permission = await queryPermissionState('microphone');
+  if (permission === 'denied') throw new Error('Microphone permission is blocked. Allow it in browser settings and retry.');
+  const stream = await navigator.mediaDevices.getUserMedia({
+    video: false,
+    audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+  });
+  const track = stream.getAudioTracks()[0];
+  const settings = track?.getSettings?.() || {};
+  if (!track || track.readyState !== 'live' || !track.enabled || track.muted) {
+    stream.getTracks().forEach((item) => item.stop());
+    throw new Error('The microphone did not provide an active audio track. Check the device and retry.');
+  }
+  const result = { label: track.label || 'Microphone', sampleRate: Number(settings.sampleRate || 0) };
+  stream.getTracks().forEach((item) => item.stop());
+  return result;
 }
 
 function needsMicrophone(exam) {
-  const settings = exam.settings || {};
-  return Boolean(settings.microphoneRequired || settings.noiseMonitoring || settings.proctoringEnabled);
+  // Whole-attempt camera evidence includes audio for every exam.
+  return Boolean(exam);
 }
 
 function passedSetupKeys(exam) {
@@ -466,7 +537,7 @@ function buildSecurityTerms(settings = {}) {
     'A proctor may view the live camera when enabled.',
   ];
   if (settings.fullscreenEnabled || settings.requireFullscreenBeforeStart) terms.push('Keep full screen active until submission.');
-  if (settings.microphoneRequired || settings.noiseMonitoring || settings.proctoringEnabled) terms.push('Microphone signals may be monitored.');
+  terms.push('The complete exam camera recording includes microphone audio.');
   return terms;
 }
 
@@ -477,7 +548,7 @@ function StepStatusIcon({ status }) {
   return <span className="h-2.5 w-2.5 rounded-full bg-slate-200" />;
 }
 
-function EnvironmentCheckCard({ item }) {
+function EnvironmentCheckCard({ item, onAction }) {
   const Icon = item.icon;
   return (
     <div className={`rounded-2xl border p-4 transition ${item.status === 'passed' ? 'border-emerald-200 bg-emerald-50/70' : item.status === 'failed' ? 'border-red-200 bg-red-50' : 'border-slate-200 bg-white'}`}>
@@ -491,6 +562,11 @@ function EnvironmentCheckCard({ item }) {
             <StepStatusIcon status={item.status} />
           </div>
           <p className="mt-1 text-xs leading-5 text-slate-500">{item.detail}</p>
+          {item.status === 'failed' && onAction ? (
+            <button type="button" className="mt-2 rounded-lg border border-red-200 bg-white px-3 py-1.5 text-[11px] font-bold text-red-700 hover:bg-red-50" onClick={() => onAction(item.key)}>
+              {item.key === 'permissions' ? 'Allow microphone' : item.key === 'integrity' ? 'Check tabs again' : 'Check again'}
+            </button>
+          ) : null}
         </div>
       </div>
     </div>
@@ -640,6 +716,7 @@ export function SecuritySetupDialog({ exam, onClose, onAttemptUpdated, onStarted
   const [environmentChecks, setEnvironmentChecks] = useState(INITIAL_ENVIRONMENT_CHECKS);
   const [cameraStream, setCameraStream] = useState(null);
   const [cameraDetails, setCameraDetails] = useState(null);
+  const [cameraAlignment, setCameraAlignment] = useState('idle');
   const [liveTarget, setLiveTarget] = useState('');
   const [modelStatus, setModelStatus] = useState('idle');
   const [locationResult, setLocationResult] = useState(exam.attempt?.locationVerification || null);
@@ -654,6 +731,7 @@ export function SecuritySetupDialog({ exam, onClose, onAttemptUpdated, onStarted
   const videoRef = useRef(null);
   const cameraStreamRef = useRef(null);
   const mediaHandoffRef = useRef(false);
+  const setupTabInstanceRef = useRef(`setup-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   const current = phases[activeIndex] || phases[0];
   const CurrentIcon = current.icon;
   const isReviewPhase = current.key === 'review';
@@ -665,6 +743,24 @@ export function SecuritySetupDialog({ exam, onClose, onAttemptUpdated, onStarted
     if (videoRef.current.srcObject !== cameraStream) videoRef.current.srcObject = cameraStream;
     videoRef.current.play().catch(() => {});
   }, [activeIndex, cameraStream, liveTarget]);
+
+  useEffect(() => {
+    if (typeof window.BroadcastChannel === 'undefined') return undefined;
+    const channel = new window.BroadcastChannel(`evalora-exam-${exam.assignmentId}`);
+    const instanceId = setupTabInstanceRef.current;
+    channel.onmessage = (event) => {
+      if (!event.data?.instanceId || event.data.instanceId === instanceId) return;
+      if (event.data.type === 'security-probe') {
+        channel.postMessage({ type: 'exam-tab-online', instanceId });
+      }
+    };
+    channel.postMessage({ type: 'exam-tab-online', instanceId });
+    const pulse = window.setInterval(() => channel.postMessage({ type: 'exam-tab-online', instanceId }), 2000);
+    return () => {
+      window.clearInterval(pulse);
+      channel.close();
+    };
+  }, [exam.assignmentId]);
 
   useEffect(() => () => {
     if (!mediaHandoffRef.current) {
@@ -762,7 +858,9 @@ export function SecuritySetupDialog({ exam, onClose, onAttemptUpdated, onStarted
     if (!navigator.mediaDevices?.getUserMedia) throw new Error('Camera access is unavailable in this browser.');
     const stream = await navigator.mediaDevices.getUserMedia({
       video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
-      audio: false,
+      // Acquire one combined stream during setup and hand it to the attempt.
+      // This prevents a second microphone prompt after the exam has started.
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
     });
     cameraStreamRef.current = stream;
     setCameraStream(stream);
@@ -825,7 +923,18 @@ export function SecuritySetupDialog({ exam, onClose, onAttemptUpdated, onStarted
   async function verifyActiveCamera(faceapi) {
     const stream = await ensureCameraStream();
     const frame = await waitForCameraFrame(stream);
-    const face = await detectFaceDescriptor(faceapi, frame, 'selfie');
+    const face = await detectLiveFace(faceapi, frame);
+    // Match the on-screen elliptical guide (44% wide, 72% high). A small
+    // inset keeps the full face away from the edge of the guide.
+    const normalizedX = (face.faceCenterXRatio - 0.5) / 0.19;
+    const normalizedY = (face.faceCenterYRatio - 0.5) / 0.31;
+    const centered = (normalizedX ** 2) + (normalizedY ** 2) <= 1;
+    const usefulSize = face.faceHeightRatio >= 0.18 && face.faceHeightRatio <= 0.62;
+    if (!centered || !usefulSize) {
+      setCameraAlignment('misaligned');
+      throw new Error('Move your full face inside the circle and look straight at the camera. The circle will turn green when you are aligned.');
+    }
+    setCameraAlignment('aligned');
     const track = stream.getVideoTracks().find((item) => item.readyState === 'live' && item.enabled);
     const settings = track?.getSettings?.() || {};
     const details = {
@@ -844,6 +953,7 @@ export function SecuritySetupDialog({ exam, onClose, onAttemptUpdated, onStarted
     setWorkingText('Checking environment…');
     setError(null);
     setEnvironmentChecks(INITIAL_ENVIRONMENT_CHECKS.map((item) => ({ ...item, status: 'running', detail: 'Checking now…' })));
+    let activeCheck = 'session';
     try {
       if (!window.isSecureContext) throw new Error('Open Evalora through a secure HTTPS connection.');
       if (!navigator.cookieEnabled) throw new Error('Cookies are blocked. Enable them for Evalora and retry.');
@@ -853,36 +963,38 @@ export function SecuritySetupDialog({ exam, onClose, onAttemptUpdated, onStarted
       if (navigator.webdriver) throw new Error('Browser automation was detected. Use a normal browser session.');
       updateEnvironmentCheck('session', 'passed', 'HTTPS, cookies, and secure storage are available');
 
-      const [network, duplicateTab] = await Promise.all([probeNetwork(), hasDuplicateExamTab(exam.assignmentId)]);
+      activeCheck = 'privacy';
+      const privacy = await inspectPrivateModeSignals();
+      updateEnvironmentCheck('privacy', 'passed', `Normal storage session${privacy.quotaMb ? ` · ${privacy.quotaMb} MB quota` : ''}`);
+
+      activeCheck = 'connection';
+      const network = await probeNetwork();
       updateEnvironmentCheck(
         'connection',
         'passed',
-        `${network.latency} ms server response${network.downlink ? ` · ${network.downlink.toFixed(1)} Mbps estimate` : ''}${network.effectiveType !== 'unknown' ? ` · ${network.effectiveType}` : ''}`,
+        `${network.latency} ms latency · ${network.measuredMbps.toFixed(2)} Mbps measured${network.effectiveType !== 'unknown' ? ` · ${network.effectiveType}` : ''}`,
       );
 
+      activeCheck = 'integrity';
+      const duplicateTab = await hasDuplicateExamTab(exam.assignmentId, setupTabInstanceRef.current);
       if (document.visibilityState !== 'visible' || !document.hasFocus()) throw new Error('Keep this exam tab visible and active while checking.');
       if (duplicateTab) throw new Error('This exam is open in another Evalora tab. Close the other tab and retry.');
       if (!document.documentElement.requestFullscreen) throw new Error('This browser does not support the required full-screen mode.');
       updateEnvironmentCheck('integrity', 'passed', 'Active window, normal browser, and no duplicate exam tab');
 
-      const microphoneRequired = needsMicrophone(exam);
-      if (microphoneRequired) {
-        if (!navigator.mediaDevices?.getUserMedia) throw new Error('Required microphone access is unavailable.');
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: false,
-          audio: true,
-        });
-        stream.getTracks().forEach((track) => track.stop());
-        updateEnvironmentCheck('permissions', 'passed', 'Microphone permission granted');
-      } else {
-        updateEnvironmentCheck('permissions', 'passed', 'Camera will be verified in the next dedicated phase');
-      }
+      activeCheck = 'permissions';
+      const microphone = await verifyMicrophone();
+      updateEnvironmentCheck('permissions', 'passed', `${microphone.label} active${microphone.sampleRate ? ` · ${microphone.sampleRate} Hz` : ''}`);
 
-      await saveSetupStep('browser', `Environment verified. Server latency ${network.latency}ms; connection ${network.effectiveType}.`);
-      if (microphoneRequired) await saveSetupStep('microphone', 'Microphone permission and active audio track verified.');
+      await saveSetupStep('browser', `Environment verified: normal session; latency ${network.latency}ms; measured download ${network.measuredMbps}Mbps; no duplicate tab.`);
+      await saveSetupStep('microphone', `Active microphone verified${microphone.sampleRate ? ` at ${microphone.sampleRate}Hz` : ''}.`);
       markPhaseComplete('environment');
     } catch (requestError) {
-      setEnvironmentChecks((items) => items.map((item) => (item.status === 'running' ? { ...item, status: 'failed', detail: 'Needs attention before continuing' } : item)));
+      setEnvironmentChecks((items) => items.map((item) => {
+        if (item.key === activeCheck) return { ...item, status: 'failed', detail: getStudentFriendlyError(requestError, 'Needs attention before continuing') };
+        if (item.status === 'running') return { ...item, status: 'idle', detail: 'Waiting for the failed check to be corrected' };
+        return item;
+      }));
       const message = showError(
         requestError,
         'We could not complete the environment check. Review the items above, then try again.',
@@ -892,6 +1004,26 @@ export function SecuritySetupDialog({ exam, onClose, onAttemptUpdated, onStarted
     } finally {
       setWorking(false);
     }
+  }
+
+  async function recoverEnvironmentCheck(key) {
+    setError(null);
+    if (key === 'permissions') {
+      updateEnvironmentCheck('permissions', 'running', 'Requesting microphone permission…');
+      try {
+        const microphone = await verifyMicrophone();
+        updateEnvironmentCheck('permissions', 'passed', `${microphone.label} active${microphone.sampleRate ? ` · ${microphone.sampleRate} Hz` : ''}`);
+      } catch (requestError) {
+        const permission = await queryPermissionState('microphone');
+        const message = permission === 'denied'
+          ? 'Microphone is blocked. Click the site controls icon beside the address, set Microphone to Allow, then click Try again.'
+          : getStudentFriendlyError(requestError, 'Select Allow in the browser microphone prompt, then try again.');
+        updateEnvironmentCheck('permissions', 'failed', message);
+        setError({ title: 'Microphone permission required', message });
+      }
+      return;
+    }
+    await runEnvironment();
   }
 
   async function runLocation() {
@@ -948,6 +1080,7 @@ export function SecuritySetupDialog({ exam, onClose, onAttemptUpdated, onStarted
     setWorking(true);
     setWorkingText('Starting camera…');
     setError(null);
+    setCameraAlignment('checking');
     try {
       setModelStatus('loading');
       const faceapi = await loadFaceApi();
@@ -962,6 +1095,7 @@ export function SecuritySetupDialog({ exam, onClose, onAttemptUpdated, onStarted
       }
       markPhaseComplete('camera');
     } catch (requestError) {
+      setCameraAlignment('misaligned');
       setModelStatus((currentStatus) => (currentStatus === 'loading' ? 'failed' : currentStatus));
       const message = showError(
         requestError,
@@ -1276,7 +1410,7 @@ export function SecuritySetupDialog({ exam, onClose, onAttemptUpdated, onStarted
               {current.key === 'environment' ? (
                 <div className="mt-7">
                   <div className="grid gap-3 sm:grid-cols-2">
-                    {environmentChecks.map((item) => <EnvironmentCheckCard key={item.key} item={item} />)}
+                    {environmentChecks.map((item) => <EnvironmentCheckCard key={item.key} item={item} onAction={recoverEnvironmentCheck} />)}
                   </div>
                   <div className="mt-4 flex items-start gap-3 rounded-2xl border border-blue-100 bg-blue-50/70 p-4 text-xs leading-5 text-blue-800">
                     <MonitorCheck size={17} className="mt-0.5 shrink-0" />
@@ -1321,14 +1455,16 @@ export function SecuritySetupDialog({ exam, onClose, onAttemptUpdated, onStarted
                     <div className="relative aspect-video overflow-hidden rounded-2xl bg-black">
                       <video ref={videoRef} autoPlay playsInline muted className="h-full w-full scale-x-[-1] object-cover" />
                       <div className="pointer-events-none absolute inset-0 grid place-items-center">
-                        <div className="h-[72%] w-[44%] rounded-[50%] border-2 border-dashed border-white/90 shadow-[0_0_0_999px_rgba(2,6,23,0.22)]" />
+                        <div className={`h-[72%] w-[44%] rounded-[50%] border-[3px] border-dashed shadow-[0_0_0_999px_rgba(2,6,23,0.22)] transition-colors duration-200 ${cameraAlignment === 'aligned' ? 'border-emerald-400 shadow-[0_0_22px_rgba(52,211,153,0.8),0_0_0_999px_rgba(2,6,23,0.22)]' : cameraAlignment === 'misaligned' ? 'animate-pulse border-red-500 shadow-[0_0_22px_rgba(239,68,68,0.8),0_0_0_999px_rgba(2,6,23,0.22)]' : 'border-white/90'}`} />
                       </div>
                       <span className="absolute left-3 top-3 inline-flex items-center gap-2 rounded-full bg-emerald-500/90 px-3 py-1.5 text-[11px] font-extrabold text-white shadow-sm">
                         <span className={`h-2 w-2 rounded-full ${hasLiveCameraStream(cameraStream) ? 'animate-pulse bg-white' : 'bg-amber-200'}`} />
                         {hasLiveCameraStream(cameraStream) ? 'LIVE CAMERA' : 'CAMERA READY TO START'}
                       </span>
                     </div>
-                    <p className="px-2 pb-1 pt-3 text-xs font-semibold leading-5 text-slate-300">Look straight at the camera with your face inside the guide. Keep lighting even and close apps that may be using the camera.</p>
+                    <p className={`px-2 pb-1 pt-3 text-xs font-semibold leading-5 ${cameraAlignment === 'aligned' ? 'text-emerald-400' : cameraAlignment === 'misaligned' ? 'animate-pulse text-red-400' : 'text-slate-300'}`}>
+                      {cameraAlignment === 'aligned' ? 'Face aligned — camera verified.' : cameraAlignment === 'misaligned' ? 'Face is outside the guide. Center your full face inside the red circle and try again.' : 'Look straight at the camera with your full face inside the guide.'}
+                    </p>
                   </div>
                   <div className="space-y-3">
                     <div className="rounded-2xl border border-orange-100 bg-orange-50 p-5">

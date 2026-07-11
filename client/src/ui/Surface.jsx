@@ -37,13 +37,14 @@ export function SectionPanel({ title, description, icon: Icon, actions, children
 
 export function MetricCard({ label, value, icon: Icon, helper, tone = 'default' }) {
   const toneClass = tone === 'warning' ? 'text-amber-600 bg-amber-50 border-amber-100' : 'text-brand-600 bg-brand-50 border-brand-100';
+  const isLoading = value === '...' || value === null;
 
   return (
     <div className="metric-card">
       <div className="flex items-start justify-between gap-2">
         <div>
           <p className="text-[11px] font-semibold uppercase text-slate-500">{label}</p>
-          <p className="mt-1 text-lg font-semibold leading-none text-slate-950">{value}</p>
+          {isLoading ? <span className="mt-2 block h-5 w-14 animate-pulse rounded bg-slate-200" aria-label="Loading metric" /> : <p className="mt-1 text-lg font-semibold leading-none text-slate-950">{value}</p>}
         </div>
         {Icon ? (
           <span className={`inline-flex h-8 w-8 items-center justify-center rounded-md border ${toneClass}`}>
@@ -57,6 +58,21 @@ export function MetricCard({ label, value, icon: Icon, helper, tone = 'default' 
 }
 
 export function EmptyState({ title, description }) {
+  const isLoading = /^loading\b/i.test(String(title || ''));
+  if (isLoading) {
+    return (
+      <div className="space-y-3 px-4 py-5" aria-label={title} role="status">
+        <span className="sr-only">{title}</span>
+        {Array.from({ length: 5 }, (_, index) => (
+          <div className="grid grid-cols-[2fr_1fr_0.8fr] gap-4 rounded-lg border border-slate-100 p-3" key={index}>
+            <div className="h-4 animate-pulse rounded bg-slate-200" />
+            <div className="h-4 animate-pulse rounded bg-slate-100" />
+            <div className="h-4 animate-pulse rounded bg-slate-100" />
+          </div>
+        ))}
+      </div>
+    );
+  }
   return (
     <div className="flex min-h-24 flex-col items-center justify-center px-4 py-6 text-center">
       <p className="text-sm font-semibold text-slate-700">{title}</p>

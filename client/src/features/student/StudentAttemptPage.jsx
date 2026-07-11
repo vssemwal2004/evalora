@@ -29,6 +29,9 @@ import { uploadEvidenceBlob, uploadEvidenceDataUrl } from '../../lib/storage';
 const HARD_SECURITY_HOLD_TYPES = [
   'duplicate_tab',
   'camera_missing',
+  'tab_switch',
+  'window_blur',
+  'fullscreen_exit',
 ];
 const PROCTOR_ONLY_TYPES = ['microphone_missing', 'camera_movement', 'ai_unavailable', 'ai_multiple_faces', 'ai_looking_away', 'ai_mobile_detected', 'noise_detected'];
 const MEDIAPIPE_WASM_URL = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm';
@@ -108,8 +111,12 @@ function QuestionPalette({ questions, answers, activeIndex, filter, onSelect }) 
     .map((question, index) => ({ question, index }))
     .filter(({ question }) => filter === 'all' || question.type === filter);
 
+  const density = visibleQuestions.length > 120 ? 'ultra' : visibleQuestions.length > 60 ? 'compact' : 'normal';
+  const gridClass = density === 'ultra' ? 'grid-cols-12 gap-1' : density === 'compact' ? 'grid-cols-10 gap-1.5' : 'grid-cols-7 gap-2';
+  const buttonClass = density === 'ultra' ? 'h-5 w-5 text-[8px]' : density === 'compact' ? 'h-6 w-6 text-[9px]' : 'h-8 w-8 text-[11px]';
+
   return (
-    <div className="grid grid-cols-6 gap-2">
+    <div className={`grid place-items-center ${gridClass}`}>
       {visibleQuestions.map(({ question, index }) => {
         const answer = answers[question.id];
         const answered = isAnswered(question, answer);
@@ -124,7 +131,7 @@ function QuestionPalette({ questions, answers, activeIndex, filter, onSelect }) 
 
         return (
           <button
-            className={`relative grid h-9 w-9 place-items-center rounded-full border text-xs font-semibold transition hover:border-brand-500 ${stateClass} ${active ? 'ring-2 ring-brand-200 ring-offset-2' : ''}`}
+            className={`relative grid place-items-center rounded-full border font-semibold transition hover:border-brand-500 ${buttonClass} ${stateClass} ${active ? 'ring-2 ring-brand-200 ring-offset-1' : ''}`}
             key={question.id}
             type="button"
             onClick={() => onSelect(index)}
@@ -134,7 +141,7 @@ function QuestionPalette({ questions, answers, activeIndex, filter, onSelect }) 
           </button>
         );
       })}
-      {visibleQuestions.length === 0 ? <p className="col-span-6 py-3 text-center text-xs text-slate-500">No questions in this section.</p> : null}
+      {visibleQuestions.length === 0 ? <p className="col-span-full py-3 text-center text-xs text-slate-500">No questions in this section.</p> : null}
     </div>
   );
 }
@@ -278,9 +285,12 @@ export function StudentAttemptPage() {
   const objectDetectorRef = useRef(null);
   const objectDetectorLoadingRef = useRef(false);
   const mediaStreamRef = useRef(null);
+  const cameraPreviewRef = useRef(null);
+  const mediaPermissionInFlightRef = useRef(false);
   const recordingChunksRef = useRef([]);
   const mediaRecorderRef = useRef(null);
   const recordingUploadPromiseRef = useRef(null);
+  const recordingStartedAtRef = useRef(null);
   const mediaCleanupTimerRef = useRef(null);
   const mediaMonitorSessionRef = useRef(0);
   const liveMediaStreamRef = useRef(null);
@@ -426,6 +436,7 @@ export function StudentAttemptPage() {
       };
       recorder.start(15000);
       mediaRecorderRef.current = recorder;
+      recordingStartedAtRef.current = Date.now();
     } catch (recordingError) {
       console.error('Exam recording could not start', recordingError);
     }
@@ -449,6 +460,10 @@ export function StudentAttemptPage() {
 
           const type = recorder.mimeType || 'video/webm';
           const blob = new window.Blob(chunks, { type });
+          const recordingStartedAt = recordingStartedAtRef.current;
+          const durationSeconds = recordingStartedAt
+            ? Math.max(0, Math.round((Date.now() - recordingStartedAt) / 1000))
+            : 0;
           const evidence = await uploadEvidenceBlob(blob, {
             category: 'recording',
             assignmentId,
@@ -466,12 +481,15 @@ export function StudentAttemptPage() {
                 [`${metadataKey.replace('Url', '')}Key`]: evidence.key,
                 contentType: evidence.contentType,
                 size: evidence.size,
+                recordingStartedAt: recordingStartedAt ? new Date(recordingStartedAt).toISOString() : '',
+                durationSeconds,
               },
             },
             occurredAt: new Date().toISOString(),
           });
 
           resolve(evidence);
+          recordingStartedAtRef.current = null;
         } catch (recordingError) {
           console.error('Exam recording upload failed', recordingError);
           reject(recordingError);
@@ -537,7 +555,7 @@ export function StudentAttemptPage() {
 
       const stream = await navigator.mediaDevices.getUserMedia({
         video: true,
-        audio: Boolean(exam.settings?.microphoneRequired || exam.settings?.microphoneMonitoring),
+        audio: true,
       });
       liveMediaStreamRef.current = stream;
       return stream;
@@ -731,7 +749,7 @@ export function StudentAttemptPage() {
   }, [assignmentId, exam, sendSecurityEvent]);
 
   useEffect(() => {
-    if (!exam?.settings?.multipleTabDetection || typeof window.BroadcastChannel === 'undefined') return undefined;
+    if (typeof window.BroadcastChannel === 'undefined') return undefined;
     const channel = new window.BroadcastChannel(`evalora-exam-${assignmentId}`);
     const instanceId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
@@ -806,6 +824,9 @@ export function StudentAttemptPage() {
     }
 
     function handleBlur() {
+      // Browser camera/microphone permission popovers temporarily blur the
+      // page. They are trusted setup UI, not a student tab-switch violation.
+      if (mediaPermissionInFlightRef.current) return;
       setIsWindowFocused(false);
       if (exam.settings.tabSwitchDetection) {
         startLocalSecurityHold('window_blur', 'Exam window lost focus.');
@@ -852,14 +873,12 @@ export function StudentAttemptPage() {
     if (!exam?.settings) return undefined;
 
     const needsCamera = true;
-    const needsMic = exam.settings.microphoneRequired || exam.settings.noiseMonitoring || exam.settings.proctoringEnabled;
-    const needsFaceAi = needsCamera && (
-      exam.settings.aiProctoringEnabled
-      || exam.settings.detectNoFace
-      || exam.settings.detectCameraBlocked
-      || exam.settings.detectMultipleFaces
-      || exam.settings.detectLookingAway
-    );
+    // The complete exam evidence recording always includes the microphone.
+    // Monitoring settings control analysis/alerts, not whether audio is saved.
+    const needsMic = true;
+    // Basic face presence is mandatory whenever camera evidence is recorded.
+    // Individual settings still control the additional violation rules.
+    const needsFaceAi = needsCamera;
 
     if (!needsCamera && !needsMic) {
       return undefined;
@@ -893,6 +912,14 @@ export function StudentAttemptPage() {
     async function sendProctorOnlyEvent(type, payload = {}, cooldownMs = 45000, evidenceVideo = null) {
       if (!shouldReportMediaIncident(type, cooldownMs)) return;
       const metadata = { ...(payload.metadata || {}) };
+      const capturedAt = new Date();
+      const recordingStartedAt = recordingStartedAtRef.current;
+      const recordingOffsetSeconds = recordingStartedAt
+        ? Math.max(0, Number(((capturedAt.getTime() - recordingStartedAt) / 1000).toFixed(3)))
+        : null;
+
+      metadata.recordingOffsetSeconds = recordingOffsetSeconds;
+      metadata.recordingStartedAt = recordingStartedAt ? new Date(recordingStartedAt).toISOString() : '';
 
       if (evidenceVideo) {
         const snapshot = captureEvidenceFrame(evidenceVideo);
@@ -909,7 +936,8 @@ export function StudentAttemptPage() {
               snapshotKey: evidence.key,
               contentType: evidence.contentType,
               size: evidence.size,
-              capturedAt: new Date().toISOString(),
+              capturedAt: capturedAt.toISOString(),
+              recordingOffsetSeconds,
             };
           } catch {
             metadata.evidence = {
@@ -946,17 +974,22 @@ export function StudentAttemptPage() {
       try {
         const { FaceLandmarker, FilesetResolver } = await import('@mediapipe/tasks-vision');
         const vision = await FilesetResolver.forVisionTasks(MEDIAPIPE_WASM_URL);
-        faceLandmarkerRef.current = await FaceLandmarker.createFromOptions(vision, {
-          baseOptions: {
-            modelAssetPath: MEDIAPIPE_FACE_MODEL_URL,
-            delegate: 'GPU',
-          },
+        const options = {
+          baseOptions: { modelAssetPath: MEDIAPIPE_FACE_MODEL_URL, delegate: 'GPU' },
           runningMode: 'VIDEO',
           numFaces: 4,
           minFaceDetectionConfidence: Number(exam.settings.confidenceThreshold || 0.75),
           minFacePresenceConfidence: Number(exam.settings.confidenceThreshold || 0.75),
           minTrackingConfidence: 0.5,
-        });
+        };
+        try {
+          faceLandmarkerRef.current = await FaceLandmarker.createFromOptions(vision, options);
+        } catch {
+          faceLandmarkerRef.current = await FaceLandmarker.createFromOptions(vision, {
+            ...options,
+            baseOptions: { ...options.baseOptions, delegate: 'CPU' },
+          });
+        }
         setMediaStatusIfChanged({ ai: 'ml active', face: 'checking' });
         return faceLandmarkerRef.current;
       } catch {
@@ -1161,12 +1194,26 @@ export function StudentAttemptPage() {
         const handoffCamera = handoff?.cameraStream?.getVideoTracks().some((track) => track.readyState === 'live')
           ? handoff.cameraStream
           : null;
-        let stream = handoffCamera || await navigator.mediaDevices.getUserMedia({
-          video: Boolean(needsCamera),
-          audio: Boolean(needsMic),
-        });
+        let stream = handoffCamera;
+        if (!stream) {
+          mediaPermissionInFlightRef.current = true;
+          try {
+            stream = await navigator.mediaDevices.getUserMedia({
+              video: Boolean(needsCamera),
+              audio: Boolean(needsMic),
+            });
+          } finally {
+            mediaPermissionInFlightRef.current = false;
+          }
+        }
         if (handoffCamera && needsMic && !stream.getAudioTracks().some((track) => track.readyState === 'live')) {
-          const audioStream = await navigator.mediaDevices.getUserMedia({ video: false, audio: true });
+          mediaPermissionInFlightRef.current = true;
+          let audioStream;
+          try {
+            audioStream = await navigator.mediaDevices.getUserMedia({ video: false, audio: true });
+          } finally {
+            mediaPermissionInFlightRef.current = false;
+          }
           stream = new window.MediaStream([...stream.getVideoTracks(), ...audioStream.getAudioTracks()]);
         }
 
@@ -1176,12 +1223,17 @@ export function StudentAttemptPage() {
         }
 
         mediaStreamRef.current = stream;
+        if (cameraPreviewRef.current) {
+          cameraPreviewRef.current.srcObject = stream;
+          cameraPreviewRef.current.play().catch(() => {});
+        }
         startExamRecording(stream);
         // Keep the approved camera stream available while the attempt mounts.
         // React Strict Mode replays effects in development.
         stream.getVideoTracks().forEach((track) => {
           const reportCameraMissing = () => {
             setMediaStatusIfChanged({ camera: 'missing', movement: 'unknown', face: 'blocked' });
+            startLocalSecurityHold('camera_missing', 'Camera stream stopped during the exam.', 'recheck');
             sendProctorOnlyEvent('camera_missing', {
               message: 'Camera stream stopped or was hidden during the exam.',
               severity: 'critical',
@@ -1363,6 +1415,7 @@ export function StudentAttemptPage() {
           ai: needsFaceAi ? 'blocked' : 'off',
         });
         if (needsCamera) {
+          startLocalSecurityHold('camera_missing', 'Camera permission or device is unavailable during the exam.', 'recheck');
           sendProctorOnlyEvent('camera_missing', {
             message: 'Camera permission or device is unavailable during exam.',
             severity: exam.settings.cameraRequired ? 'critical' : 'warning',
@@ -1398,7 +1451,7 @@ export function StudentAttemptPage() {
         mediaCleanupTimerRef.current = null;
       }, 250);
     };
-  }, [assignmentId, exam, sendSecurityEvent, startExamRecording, stopAndUploadExamRecording]);
+  }, [assignmentId, exam?.settings, sendSecurityEvent, startExamRecording, startLocalSecurityHold, stopAndUploadExamRecording]);
 
   function scheduleSave(question, answerPatch) {
     const questionId = question.id;
@@ -1657,49 +1710,54 @@ export function StudentAttemptPage() {
           </div>
         </main>
 
-        <aside className="relative z-20 border-l border-slate-200 bg-white xl:max-h-[calc(100vh-46px)] xl:overflow-y-auto">
-          <div className="border-b border-slate-200 px-5 py-4">
-            <img src="/logo.webp" alt="Evalora" className="h-10 w-auto max-w-[165px] object-contain object-left" />
+        <aside className="relative z-20 border-l border-slate-200 bg-white xl:flex xl:max-h-[calc(100vh-46px)] xl:flex-col xl:overflow-hidden">
+          <div className="shrink-0 border-b border-slate-200 px-4 py-2.5">
+            <img src="/logo.webp" alt="Evalora" className="h-7 w-auto max-w-[130px] object-contain object-left" />
           </div>
 
-          <div className="border-b border-slate-200 p-5">
+          <div className="shrink-0 border-b border-slate-200 p-3.5">
             <div className="flex items-center gap-3">
-              <span className="grid h-10 w-10 shrink-0 place-items-center rounded-md border border-brand-100 bg-brand-50 text-brand-700"><UserRound size={19} /></span>
-              <div className="min-w-0"><p className="truncate text-sm font-semibold text-slate-950">{user?.name || 'Student'}</p><p className="mt-0.5 truncate text-xs text-slate-500">{exam?.courseName}{exam?.courseId ? ` (${exam.courseId})` : ''}</p></div>
+              <span className="grid h-8 w-8 shrink-0 place-items-center rounded-md border border-brand-100 bg-brand-50 text-brand-700"><UserRound size={16} /></span>
+              <div className="min-w-0"><p className="truncate text-xs font-semibold text-slate-950">{user?.name || 'Student'}</p><p className="truncate text-[10px] text-slate-500">{exam?.courseName}{exam?.courseId ? ` (${exam.courseId})` : ''}</p></div>
             </div>
 
-            <div className={`mt-4 flex items-center justify-between rounded-lg border p-4 ${remainingMs !== null && remainingMs <= 600000 ? 'border-red-200 bg-red-50' : 'border-brand-100 bg-brand-50'}`}>
-              <div><p className="field-label">Time remaining</p><p className={`mt-1 font-mono text-2xl font-semibold tracking-wide ${remainingMs !== null && remainingMs <= 600000 ? 'text-red-700' : 'text-brand-700'}`}>{remainingMs === null ? '--:--' : formatTime(remainingMs)}</p></div>
-              <Clock size={22} className={remainingMs !== null && remainingMs <= 600000 ? 'text-red-600' : 'text-brand-500'} />
+            <div className={`mt-2.5 overflow-hidden rounded-lg border ${cameraAlert ? 'border-red-300 bg-red-50' : 'border-emerald-200 bg-slate-950'}`}>
+              <div className="relative h-24">
+                <video ref={cameraPreviewRef} autoPlay playsInline muted className="h-full w-full scale-x-[-1] object-cover" />
+                <span className={`absolute left-2 top-2 rounded-full px-2 py-1 text-[9px] font-bold uppercase text-white ${cameraAlert ? 'animate-pulse bg-red-600' : 'bg-emerald-600/90'}`}>
+                  {cameraAlert ? 'Camera unavailable' : 'Camera recording'}
+                </span>
+              </div>
             </div>
 
-            <button className="primary-button mt-4 w-full" type="button" onClick={() => setIsSubmitOpen(true)}><Send size={16} />Submit exam</button>
+            <div className={`mt-2.5 flex items-center justify-between rounded-lg border px-3 py-2 ${remainingMs !== null && remainingMs <= 600000 ? 'border-red-200 bg-red-50' : 'border-brand-100 bg-brand-50'}`}>
+              <div><p className="text-[9px] font-bold uppercase text-slate-500">Time remaining</p><p className={`font-mono text-lg font-semibold tracking-wide ${remainingMs !== null && remainingMs <= 600000 ? 'text-red-700' : 'text-brand-700'}`}>{remainingMs === null ? '--:--' : formatTime(remainingMs)}</p></div>
+              <Clock size={18} className={remainingMs !== null && remainingMs <= 600000 ? 'text-red-600' : 'text-brand-500'} />
+            </div>
+
+            <button className="primary-button mt-2.5 h-9 w-full text-xs" type="button" onClick={() => setIsSubmitOpen(true)}><Send size={14} />Submit exam</button>
           </div>
 
-          <div className="border-b border-slate-200 p-5">
-            <div className="flex items-center justify-between"><h2 className="text-sm font-semibold text-slate-950">Questions</h2><span className="text-xs font-semibold text-slate-500">{summary.total} total</span></div>
-            <div className="mt-3 grid grid-cols-3 rounded-md border border-slate-200 bg-slate-50 p-1">
+          <div className="flex min-h-0 flex-1 flex-col p-3.5">
+            <div className="flex shrink-0 items-center justify-between"><h2 className="text-xs font-semibold text-slate-950">Questions</h2><span className="text-[10px] font-semibold text-slate-500">{summary.total} total</span></div>
+            <div className="mt-2 grid shrink-0 grid-cols-3 rounded-md border border-slate-200 bg-slate-50 p-1">
               {[['all', 'All'], ['mcq', `MCQ (${exam?.questionSummary?.mcq || questions.filter((q) => q.type === 'mcq').length})`], ['one_word', `One word (${exam?.questionSummary?.oneWord || questions.filter((q) => q.type === 'one_word').length})`]].map(([key, label]) => (
-                <button key={key} type="button" onClick={() => setQuestionFilter(key)} className={`rounded px-2 py-2 text-[11px] font-semibold transition ${questionFilter === key ? 'bg-white text-brand-700 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}>{label}</button>
+                <button key={key} type="button" onClick={() => setQuestionFilter(key)} className={`rounded px-1 py-1.5 text-[9px] font-semibold transition ${questionFilter === key ? 'bg-white text-brand-700 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}>{label}</button>
               ))}
             </div>
 
-            <div className="mt-5"><QuestionPalette questions={questions} answers={answers} activeIndex={activeIndex} filter={questionFilter} onSelect={setActiveIndex} /></div>
+            <div className="mt-2.5 min-h-0 flex-1 overflow-y-auto overscroll-contain pr-1"><QuestionPalette questions={questions} answers={answers} activeIndex={activeIndex} filter={questionFilter} onSelect={setActiveIndex} /></div>
 
-            <div className="mt-5 grid grid-cols-3 gap-2 text-center">
-              <div className="rounded-md border border-slate-200 bg-slate-50 p-2"><p className="text-lg font-semibold text-slate-800">{summary.total}</p><p className="text-[10px] font-semibold text-slate-500">Total</p></div>
-              <div className="rounded-md border border-brand-100 bg-brand-50 p-2"><p className="text-lg font-semibold text-brand-700">{summary.answered}</p><p className="text-[10px] font-semibold text-brand-700">Attempted</p></div>
-              <div className="rounded-md border border-amber-200 bg-amber-50 p-2"><p className="text-lg font-semibold text-amber-800">{summary.markedForReview}</p><p className="text-[10px] font-semibold text-amber-700">Review</p></div>
+            <div className="mt-2.5 grid shrink-0 grid-cols-3 gap-1.5 text-center">
+              <div className="rounded-md border border-slate-200 bg-slate-50 p-1.5"><p className="text-sm font-semibold text-slate-800">{summary.total}</p><p className="text-[8px] font-semibold text-slate-500">Total</p></div>
+              <div className="rounded-md border border-brand-100 bg-brand-50 p-1.5"><p className="text-sm font-semibold text-brand-700">{summary.answered}</p><p className="text-[8px] font-semibold text-brand-700">Attempted</p></div>
+              <div className="rounded-md border border-amber-200 bg-amber-50 p-1.5"><p className="text-sm font-semibold text-amber-800">{summary.markedForReview}</p><p className="text-[8px] font-semibold text-amber-700">Review</p></div>
             </div>
-          </div>
-
-          <div className="p-5">
-            <h3 className="text-xs font-semibold uppercase text-slate-500">Question status</h3>
-            <div className="mt-3 grid grid-cols-2 gap-x-3 gap-y-3 text-xs text-slate-600">
-              <div className="flex items-center gap-2"><span className="h-5 w-5 rounded-full border border-slate-300 bg-slate-100" />Not visited</div>
-              <div className="flex items-center gap-2"><span className="h-5 w-5 rounded-full border border-brand-700 bg-brand-700" />Attempted</div>
-              <div className="flex items-center gap-2"><span className="h-5 w-5 rounded-full border border-amber-300 bg-amber-100" />For review</div>
-              <div className="flex items-center gap-2"><span className="h-5 w-5 rounded-full border border-brand-500 ring-2 ring-brand-200 ring-offset-1" />Current</div>
+            <div className="mt-2.5 grid shrink-0 grid-cols-4 gap-1 text-[8px] text-slate-500">
+              <div className="flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-full border border-slate-300 bg-slate-100" />New</div>
+              <div className="flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-full bg-brand-700" />Done</div>
+              <div className="flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-full border border-amber-300 bg-amber-100" />Review</div>
+              <div className="flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-full border border-brand-500 ring-1 ring-brand-200" />Current</div>
             </div>
           </div>
         </aside>

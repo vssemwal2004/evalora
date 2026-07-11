@@ -1919,13 +1919,36 @@ function getRecordingUrl(candidate) {
   const event = (candidate?.securityEvents || []).find((item) => {
     const evidence = item.metadata?.evidence || {};
     const source = String(evidence.source || item.type || '').toLowerCase();
-    return evidence.recordingUrl && (source.includes('camera') || source.includes('webcam'));
+    return (evidence.cameraRecordingUrl || evidence.recordingUrl) && (source.includes('camera') || source.includes('webcam'));
   });
-  return event?.metadata?.evidence?.recordingUrl || '';
+  return event?.metadata?.evidence?.cameraRecordingUrl || event?.metadata?.evidence?.recordingUrl || '';
+}
+
+function formatVideoTime(value) {
+  const total = Math.max(0, Math.floor(Number(value) || 0));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const seconds = total % 60;
+  return hours
+    ? `${hours}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
+    : `${minutes}:${String(seconds).padStart(2, '0')}`;
 }
 
 function VideoEvidence({ candidate }) {
   const url = getRecordingUrl(candidate);
+  const videoRef = useRef(null);
+  const flags = (candidate?.securityEvents || [])
+    .filter((event) => event.type !== 'exam_camera_recording'
+      && event.metadata?.recordingOffsetSeconds != null
+      && Number.isFinite(Number(event.metadata.recordingOffsetSeconds)))
+    .sort((a, b) => Number(a.metadata.recordingOffsetSeconds) - Number(b.metadata.recordingOffsetSeconds));
+
+  function seekToFlag(event) {
+    const video = videoRef.current;
+    if (!video) return;
+    video.currentTime = Math.max(0, Number(event.metadata?.recordingOffsetSeconds) || 0);
+    video.play().catch(() => {});
+  }
 
   return (
     <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
@@ -1939,7 +1962,34 @@ function VideoEvidence({ candidate }) {
         <Pill tone={url ? 'green' : 'slate'}>{url ? 'Available' : 'No recording'}</Pill>
       </div>
       {url ? (
-        <video className="aspect-video w-full rounded-lg bg-slate-950" controls preload="none" src={url} />
+        <>
+          <video ref={videoRef} className="aspect-video w-full rounded-lg bg-slate-950" controls preload="metadata" src={url} />
+          <div className="mt-3 rounded-lg border border-slate-200 bg-white p-3">
+            <p className="text-xs font-bold text-slate-900">Violation timestamps ({flags.length})</p>
+            {flags.length ? (
+              <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                {flags.map((event, index) => (
+                  <button
+                    className="flex items-center gap-3 rounded-lg border border-slate-200 p-2 text-left hover:border-orange-300 hover:bg-orange-50"
+                    key={event.id || `${event.type}-${index}`}
+                    type="button"
+                    onClick={() => seekToFlag(event)}
+                  >
+                    {event.metadata?.evidence?.snapshotUrl ? (
+                      <img className="h-12 w-16 shrink-0 rounded object-cover" src={event.metadata.evidence.snapshotUrl} alt="" loading="lazy" />
+                    ) : (
+                      <span className="grid h-12 w-16 shrink-0 place-items-center rounded bg-slate-100 text-slate-400"><ShieldAlert size={16} /></span>
+                    )}
+                    <span className="min-w-0">
+                      <span className="block text-xs font-bold text-slate-900">{titleCase(event.type)}</span>
+                      <span className="text-[11px] font-semibold text-brand-600">Play at {formatVideoTime(event.metadata.recordingOffsetSeconds)}</span>
+                    </span>
+                  </button>
+                ))}
+              </div>
+            ) : <p className="mt-2 text-xs text-slate-500">No timestamped violations were detected in this recording.</p>}
+          </div>
+        </>
       ) : (
         <div className="grid aspect-video place-items-center rounded-lg border border-dashed border-slate-300 bg-white text-center">
           <div>

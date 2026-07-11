@@ -45,10 +45,11 @@ describe('student exam setup sequencing', () => {
     assert.deepEqual(getMissingStepPrerequisites(assessment, attempt, 'identity'), ['camera']);
   });
 
-  it('requires the dedicated camera phase even when proctoring settings are off', () => {
+  it('requires microphone audio and the dedicated camera phase even when proctoring settings are off', () => {
     const steps = getRequiredSetupSteps({ settings: {} });
+    assert.ok(steps.includes('microphone'));
     assert.ok(steps.includes('camera'));
-    assert.deepEqual(getMissingStepPrerequisites({ settings: {} }, attemptWith('verify', 'browser', 'location'), 'identity'), ['camera']);
+    assert.deepEqual(getMissingStepPrerequisites({ settings: {} }, attemptWith('verify', 'browser', 'location'), 'identity'), ['microphone', 'camera']);
   });
 
   it('requires a fresh camera check after location before identity can continue', () => {

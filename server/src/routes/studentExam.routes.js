@@ -92,6 +92,9 @@ router.use('/exams/:assignmentId', validateObjectIdParams('assignmentId'));
 const SECURITY_HOLD_TYPES = [
   'duplicate_tab',
   'camera_missing',
+  'tab_switch',
+  'window_blur',
+  'fullscreen_exit',
 ];
 
 function deriveOperationalStatus(assessment) {
@@ -463,7 +466,7 @@ function startSecurityHold(attempt, assessment, type, reason) {
   if (attempt.securityHold?.active) return;
 
   const now = new Date();
-  const immediateRecheck = ['duplicate_tab', 'camera_missing'].includes(type);
+  const immediateRecheck = ['duplicate_tab', 'camera_missing', 'fullscreen_exit'].includes(type);
   const graceSeconds = immediateRecheck ? 0 : 15;
   const timeoutSeconds = Math.max(Number(assessment.settings?.securityRecheckTimeoutSeconds || 120), 30);
   const graceEndsAt = new Date(now.getTime() + graceSeconds * 1000);
