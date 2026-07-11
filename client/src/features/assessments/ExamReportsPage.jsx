@@ -1168,7 +1168,7 @@ function ProctoringCandidateTable({ items, isLoading, pagination, page, pageSize
   return (
     <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
       <div className="overflow-x-auto">
-        <table className="min-w-[1040px] w-full border-collapse text-left text-xs">
+        <table className="min-w-[1160px] w-full border-collapse text-left text-xs">
           <thead className="sticky top-0 z-10 bg-slate-50 text-[11px] uppercase text-slate-500 shadow-[0_1px_0_#e2e8f0]">
             <tr>
               <th className="w-12 px-4 py-2.5"><input type="checkbox" className="rounded border-slate-300" aria-label="Select all candidates" /></th>
@@ -1437,15 +1437,16 @@ function ActivityLogTable({ items, isLoading, pagination, page, pageSize, onPage
               <th className="px-4 py-3 font-bold">Unique ID</th>
               <th className="px-4 py-3 font-bold">Activity</th>
               <th className="px-4 py-3 font-bold">Severity</th>
+              <th className="px-4 py-3 font-bold">Evidence</th>
               <th className="px-4 py-3 font-bold">Message</th>
               <th className="px-4 py-3 font-bold">Proctor</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100 bg-white">
             {isLoading ? (
-              <LoadingTable columns={7} />
+              <LoadingTable columns={8} />
             ) : items.length === 0 ? (
-              <tr><td colSpan={7}><EmptyState title="No activity logs found" description="Activity logs appear as monitoring events are captured." /></td></tr>
+              <tr><td colSpan={8}><EmptyState title="No activity logs found" description="Activity logs appear as monitoring events are captured." /></td></tr>
             ) : (
               items.map((event) => (
                 <tr className="hover:bg-orange-50/40" key={event.id}>
@@ -1457,6 +1458,14 @@ function ActivityLogTable({ items, isLoading, pagination, page, pageSize, onPage
                   <td className="px-4 py-3 font-semibold text-slate-700">{event.uniqueId || '-'}</td>
                   <td className="px-4 py-3 font-bold capitalize text-slate-800">{titleCase(event.type)}</td>
                   <td className="px-4 py-3"><span className={`inline-flex rounded-full border px-2 py-1 text-[10px] font-bold capitalize ${statusBadgeClass(event.severity)}`}>{event.severity}</span></td>
+                  <td className="px-4 py-3">
+                    {event.metadata?.evidence?.snapshotUrl ? (
+                      <a href={event.metadata.evidence.snapshotUrl} target="_blank" rel="noreferrer" className="block w-28 overflow-hidden rounded-md border border-slate-200 bg-slate-50">
+                        <img src={event.metadata.evidence.snapshotUrl} alt={`${titleCase(event.type)} snapshot`} className="h-16 w-full object-cover" loading="lazy" />
+                        <span className="block px-1.5 py-1 text-[10px] font-semibold text-slate-500">{formatDate(event.metadata.evidence.capturedAt || event.occurredAt)}</span>
+                      </a>
+                    ) : '-'}
+                  </td>
                   <td className="max-w-sm px-4 py-3 text-slate-600">{event.message}</td>
                   <td className="px-4 py-3 text-slate-500">{event.proctorName || '-'}</td>
                 </tr>
@@ -1903,30 +1912,29 @@ function DetailRow({ label, value }) {
   );
 }
 
-function getRecordingUrl(candidate, kind) {
-  const direct = candidate?.recordings?.[kind] || candidate?.recordings?.[`${kind}Url`] || candidate?.monitoring?.[`${kind}RecordingUrl`];
+function getRecordingUrl(candidate) {
+  const direct = candidate?.recordings?.camera || candidate?.recordings?.cameraUrl || candidate?.monitoring?.cameraRecordingUrl;
   if (direct) return direct;
 
   const event = (candidate?.securityEvents || []).find((item) => {
     const evidence = item.metadata?.evidence || {};
     const source = String(evidence.source || item.type || '').toLowerCase();
-    return evidence.recordingUrl && (source.includes(kind) || source.includes(kind === 'camera' ? 'webcam' : 'screen'));
+    return evidence.recordingUrl && (source.includes('camera') || source.includes('webcam'));
   });
   return event?.metadata?.evidence?.recordingUrl || '';
 }
 
-function VideoEvidence({ candidate, type }) {
-  const url = getRecordingUrl(candidate, type);
-  const label = type === 'camera' ? 'Candidate camera recording' : 'Screen recording';
+function VideoEvidence({ candidate }) {
+  const url = getRecordingUrl(candidate);
 
   return (
     <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
       <div className="mb-3 flex items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <span className="grid h-8 w-8 place-items-center rounded-lg bg-orange-50 text-brand-600">
-            {type === 'camera' ? <Camera size={15} /> : <Video size={15} />}
+            <Camera size={15} />
           </span>
-          <p className="text-sm font-bold text-slate-950">{label}</p>
+          <p className="text-sm font-bold text-slate-950">Candidate camera recording</p>
         </div>
         <Pill tone={url ? 'green' : 'slate'}>{url ? 'Available' : 'No recording'}</Pill>
       </div>
@@ -2021,6 +2029,14 @@ function SecurityTimeline({ events }) {
             </div>
             <span className="shrink-0 text-xs font-semibold text-slate-400">{formatDate(event.occurredAt)}</span>
           </div>
+          {event.metadata?.evidence?.snapshotUrl ? (
+            <a href={event.metadata.evidence.snapshotUrl} target="_blank" rel="noreferrer" className="mt-3 block max-w-xs overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
+              <img src={event.metadata.evidence.snapshotUrl} alt={`${titleCase(event.type)} snapshot`} className="h-32 w-full object-cover" loading="lazy" />
+              <span className="block px-2 py-1.5 text-[11px] font-semibold text-slate-500">
+                Snapshot captured {formatDate(event.metadata.evidence.capturedAt || event.occurredAt)}
+              </span>
+            </a>
+          ) : null}
           {event.proctorName ? <p className="mt-3 text-[11px] font-bold text-slate-400">Marked by {event.proctorName}</p> : null}
         </article>
       ))}
@@ -2031,12 +2047,10 @@ function SecurityTimeline({ events }) {
 function CandidateDetailModal({ detail, isLoading, initialTab = 'summary', onClose, onUfmDecision, canDecideUfm, canViewRecordings }) {
   const [activeTab, setActiveTab] = useState(initialTab);
   const [logTab, setLogTab] = useState('exam');
-  const [recordingTab, setRecordingTab] = useState('camera');
 
   useEffect(() => {
     setActiveTab(initialTab);
     setLogTab('exam');
-    setRecordingTab('camera');
   }, [detail?.candidate?.assignmentId, initialTab]);
 
   if (!detail && !isLoading) return null;
@@ -2272,17 +2286,7 @@ function CandidateDetailModal({ detail, isLoading, initialTab = 'summary', onClo
 
               {activeTab === 'recordings' ? (
                 canViewRecordings ? (
-                  <div className="space-y-4">
-                    <div className="flex flex-wrap gap-2">
-                      {[
-                        ['camera', 'Candidate'],
-                        ['screen', 'Screen'],
-                      ].map(([id, label]) => (
-                        <button className={`rounded-lg border px-3 py-2 text-xs font-bold ${recordingTab === id ? 'border-orange-200 bg-orange-50 text-brand-700' : 'border-slate-200 bg-white text-slate-600'}`} key={id} type="button" onClick={() => setRecordingTab(id)}>{label}</button>
-                      ))}
-                    </div>
-                    <VideoEvidence candidate={candidate} type={recordingTab} />
-                  </div>
+                  <VideoEvidence candidate={candidate} />
                 ) : (
                   <EmptyState title="Recording access is restricted" description="Ask a super admin to enable report recording access for this admin." />
                 )

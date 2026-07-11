@@ -26,8 +26,11 @@ import { useAuth } from '../auth/AuthContext.jsx';
 import { api } from '../../lib/api';
 import { uploadEvidenceBlob, uploadEvidenceDataUrl } from '../../lib/storage';
 
-const HARD_SECURITY_HOLD_TYPES = ['tab_switch', 'window_blur', 'fullscreen_exit', 'screenshot_attempt', 'duplicate_tab', 'shortcut_attempt', 'idle_detected'];
-const PROCTOR_ONLY_TYPES = ['camera_missing', 'microphone_missing', 'camera_movement', 'ai_unavailable', 'ai_no_face', 'ai_multiple_faces', 'ai_looking_away', 'ai_camera_blocked', 'ai_mobile_detected', 'noise_detected'];
+const HARD_SECURITY_HOLD_TYPES = [
+  'duplicate_tab',
+  'camera_missing',
+];
+const PROCTOR_ONLY_TYPES = ['microphone_missing', 'camera_movement', 'ai_unavailable', 'ai_multiple_faces', 'ai_looking_away', 'ai_mobile_detected', 'noise_detected'];
 const MEDIAPIPE_WASM_URL = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm';
 const MEDIAPIPE_FACE_MODEL_URL = 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task';
 const RECORDING_MIME_TYPE = 'video/webm;codecs=vp8,opus';
@@ -278,6 +281,8 @@ export function StudentAttemptPage() {
   const recordingChunksRef = useRef([]);
   const mediaRecorderRef = useRef(null);
   const recordingUploadPromiseRef = useRef(null);
+  const mediaCleanupTimerRef = useRef(null);
+  const mediaMonitorSessionRef = useRef(0);
   const liveMediaStreamRef = useRef(null);
   const proctorPeerRef = useRef(null);
   const studentSocketRef = useRef(null);
@@ -426,17 +431,17 @@ export function StudentAttemptPage() {
     }
   }, []);
 
-  const stopAndUploadExamRecording = useCallback(async (reason = 'submitted') => {
-    if (recordingUploadPromiseRef.current) return recordingUploadPromiseRef.current;
-    const recorder = mediaRecorderRef.current;
+  const stopAndUploadRecorder = useCallback(async ({ reason, recorderRef, chunksRef, uploadPromiseRef, filename, eventType, metadataKey }) => {
+    if (uploadPromiseRef.current) return uploadPromiseRef.current;
+    const recorder = recorderRef.current;
     if (!recorder) return null;
 
-    recordingUploadPromiseRef.current = new Promise((resolve, reject) => {
+    uploadPromiseRef.current = new Promise((resolve, reject) => {
       const finish = async () => {
         try {
-          const chunks = recordingChunksRef.current;
-          recordingChunksRef.current = [];
-          mediaRecorderRef.current = null;
+          const chunks = chunksRef.current;
+          chunksRef.current = [];
+          recorderRef.current = null;
           if (!chunks.length) {
             resolve(null);
             return;
@@ -447,18 +452,18 @@ export function StudentAttemptPage() {
           const evidence = await uploadEvidenceBlob(blob, {
             category: 'recording',
             assignmentId,
-            filename: `exam-recording-${reason}.webm`,
+            filename,
           });
 
           await api.post(`/student/exams/${assignmentId}/security-event`, {
-            type: 'exam_recording',
+            type: eventType,
             severity: 'info',
             score: 0,
-            message: `Exam recording uploaded (${reason}).`,
+            message: `Camera recording uploaded (${reason}).`,
             metadata: {
               evidence: {
-                recordingUrl: evidence.url,
-                recordingKey: evidence.key,
+                [metadataKey]: evidence.url,
+                [`${metadataKey.replace('Url', '')}Key`]: evidence.key,
                 contentType: evidence.contentType,
                 size: evidence.size,
               },
@@ -485,11 +490,23 @@ export function StudentAttemptPage() {
       }
       recorder.stop();
     }).finally(() => {
-      recordingUploadPromiseRef.current = null;
+      uploadPromiseRef.current = null;
     });
 
-    return recordingUploadPromiseRef.current;
+    return uploadPromiseRef.current;
   }, [assignmentId]);
+
+  const stopAndUploadExamRecording = useCallback(async (reason = 'submitted') => {
+    return stopAndUploadRecorder({
+      reason,
+      recorderRef: mediaRecorderRef,
+      chunksRef: recordingChunksRef,
+      uploadPromiseRef: recordingUploadPromiseRef,
+      filename: `camera-recording-${reason}.webm`,
+      eventType: 'exam_camera_recording',
+      metadataKey: 'cameraRecordingUrl',
+    });
+  }, [stopAndUploadRecorder]);
 
   const startLocalSecurityHold = useCallback((type, reason, phase = 'grace') => {
     if (!HARD_SECURITY_HOLD_TYPES.includes(type)) return;
@@ -834,13 +851,25 @@ export function StudentAttemptPage() {
   useEffect(() => {
     if (!exam?.settings) return undefined;
 
-    const needsCamera = exam.settings.cameraRequired || exam.settings.cameraMonitoring || exam.settings.proctoringEnabled;
+    const needsCamera = true;
     const needsMic = exam.settings.microphoneRequired || exam.settings.noiseMonitoring || exam.settings.proctoringEnabled;
+    const needsFaceAi = needsCamera && (
+      exam.settings.aiProctoringEnabled
+      || exam.settings.detectNoFace
+      || exam.settings.detectCameraBlocked
+      || exam.settings.detectMultipleFaces
+      || exam.settings.detectLookingAway
+    );
 
     if (!needsCamera && !needsMic) {
       return undefined;
     }
 
+    if (mediaCleanupTimerRef.current) {
+      window.clearTimeout(mediaCleanupTimerRef.current);
+      mediaCleanupTimerRef.current = null;
+    }
+    const monitorSession = ++mediaMonitorSessionRef.current;
     let cancelled = false;
     let movementInterval;
     let noiseInterval;
@@ -880,6 +909,7 @@ export function StudentAttemptPage() {
               snapshotKey: evidence.key,
               contentType: evidence.contentType,
               size: evidence.size,
+              capturedAt: new Date().toISOString(),
             };
           } catch {
             metadata.evidence = {
@@ -1024,7 +1054,7 @@ export function StudentAttemptPage() {
           setMediaStatusIfChanged({ face: 'multiple' });
           sendProctorOnlyEvent('ai_multiple_faces', {
             message: 'Multiple faces detected in camera frame.',
-            severity: 'critical',
+            severity: 'warning',
             score: 2,
             metadata: { faces: faces.length, detector: source },
           }, 45000, video);
@@ -1087,7 +1117,7 @@ export function StudentAttemptPage() {
           setMediaStatusIfChanged({ object: 'mobile phone' });
           sendProctorOnlyEvent('ai_mobile_detected', {
             message: 'Mobile phone detected in camera frame.',
-            severity: 'critical',
+            severity: 'warning',
             score: 2,
             metadata: {
               detector: 'coco-ssd',
@@ -1106,7 +1136,7 @@ export function StudentAttemptPage() {
           setMediaStatusIfChanged({ object: 'multiple people' });
           sendProctorOnlyEvent('ai_multiple_faces', {
             message: 'Multiple people detected in camera frame.',
-            severity: 'critical',
+            severity: 'warning',
             score: 2,
             metadata: {
               detector: 'coco-ssd',
@@ -1126,10 +1156,19 @@ export function StudentAttemptPage() {
 
     async function startMediaMonitoring() {
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({
+        let monitorVideo = null;
+        const handoff = window.__evaloraExamMedia?.assignmentId === assignmentId ? window.__evaloraExamMedia : null;
+        const handoffCamera = handoff?.cameraStream?.getVideoTracks().some((track) => track.readyState === 'live')
+          ? handoff.cameraStream
+          : null;
+        let stream = handoffCamera || await navigator.mediaDevices.getUserMedia({
           video: Boolean(needsCamera),
           audio: Boolean(needsMic),
         });
+        if (handoffCamera && needsMic && !stream.getAudioTracks().some((track) => track.readyState === 'live')) {
+          const audioStream = await navigator.mediaDevices.getUserMedia({ video: false, audio: true });
+          stream = new window.MediaStream([...stream.getVideoTracks(), ...audioStream.getAudioTracks()]);
+        }
 
         if (cancelled) {
           stream.getTracks().forEach((track) => track.stop());
@@ -1138,6 +1177,8 @@ export function StudentAttemptPage() {
 
         mediaStreamRef.current = stream;
         startExamRecording(stream);
+        // Keep the approved camera stream available while the attempt mounts.
+        // React Strict Mode replays effects in development.
         stream.getVideoTracks().forEach((track) => {
           const reportCameraMissing = () => {
             setMediaStatusIfChanged({ camera: 'missing', movement: 'unknown', face: 'blocked' });
@@ -1145,7 +1186,7 @@ export function StudentAttemptPage() {
               message: 'Camera stream stopped or was hidden during the exam.',
               severity: 'critical',
               score: 3,
-            }, 60000);
+            }, 60000, monitorVideo);
           };
           track.addEventListener('ended', reportCameraMissing);
           track.addEventListener('mute', reportCameraMissing);
@@ -1168,9 +1209,9 @@ export function StudentAttemptPage() {
           camera: needsCamera ? 'active' : 'off',
           microphone: needsMic ? 'active' : 'off',
           movement: 'steady',
-          face: exam.settings.aiProctoringEnabled ? 'checking' : 'off',
+          face: needsFaceAi ? 'checking' : 'off',
           object: 'clear',
-          ai: exam.settings.aiProctoringEnabled ? 'active' : 'off',
+          ai: needsFaceAi ? 'active' : 'off',
         });
 
         if (needsCamera) {
@@ -1178,6 +1219,8 @@ export function StudentAttemptPage() {
           video.srcObject = stream;
           video.muted = true;
           await video.play();
+          if (cancelled || mediaMonitorSessionRef.current !== monitorSession) return;
+          monitorVideo = video;
 
           const canvas = document.createElement('canvas');
           canvas.width = 96;
@@ -1185,7 +1228,7 @@ export function StudentAttemptPage() {
           movementCanvasRef.current = canvas;
           const context = canvas.getContext('2d', { willReadFrequently: true });
 
-          if (exam.settings.aiProctoringEnabled) {
+          if (needsFaceAi) {
             setMediaStatusIfChanged({ ai: 'loading ml', face: 'checking', object: 'checking' });
             loadFaceLandmarker();
             if (exam.settings.detectMobilePhone || exam.settings.detectMultiplePersons) {
@@ -1214,7 +1257,7 @@ export function StudentAttemptPage() {
             const contrast = lumaMax - lumaMin;
 
             const cameraBlocked = avgLuma < 12 || contrast < 8;
-            if (exam.settings.aiProctoringEnabled && cameraBlocked) {
+            if (needsFaceAi && exam.settings.detectCameraBlocked !== false && cameraBlocked) {
               if (noteStableSignal('blockedCamera', true, 2)) {
                 setMediaStatusIfChanged({ face: 'blocked' });
                 sendProctorOnlyEvent('ai_camera_blocked', {
@@ -1254,7 +1297,7 @@ export function StudentAttemptPage() {
 
             lastFrameRef.current = new Uint8ClampedArray(frame);
 
-            if (exam.settings.aiProctoringEnabled && !faceDetectingRef.current) {
+            if (needsFaceAi && !faceDetectingRef.current) {
               faceDetectingRef.current = true;
               const detectionPromise = Promise.all([
                 Promise.resolve(faceLandmarkerRef.current || loadFaceLandmarker())
@@ -1317,7 +1360,7 @@ export function StudentAttemptPage() {
           movement: 'unknown',
           face: 'unknown',
           object: 'unknown',
-          ai: exam.settings.aiProctoringEnabled ? 'blocked' : 'off',
+          ai: needsFaceAi ? 'blocked' : 'off',
         });
         if (needsCamera) {
           sendProctorOnlyEvent('camera_missing', {
@@ -1341,12 +1384,19 @@ export function StudentAttemptPage() {
       if (movementInterval) window.clearInterval(movementInterval);
       if (noiseInterval) window.clearInterval(noiseInterval);
       if (audioContext) audioContext.close().catch(() => {});
-      if (mediaStreamRef.current) {
-        stopAndUploadExamRecording('closed').catch(() => {});
-        mediaStreamRef.current.getTracks().forEach((track) => track.stop());
-      }
-      mediaStreamRef.current = null;
-      lastFrameRef.current = null;
+      mediaCleanupTimerRef.current = window.setTimeout(() => {
+        // The current session check intentionally protects streams reused by
+        // React Strict Mode's development-only effect replay.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+        if (mediaMonitorSessionRef.current !== monitorSession) return;
+        if (mediaStreamRef.current) {
+          stopAndUploadExamRecording('closed').catch(() => {});
+          mediaStreamRef.current.getTracks().forEach((track) => track.stop());
+        }
+        mediaStreamRef.current = null;
+        lastFrameRef.current = null;
+        mediaCleanupTimerRef.current = null;
+      }, 250);
     };
   }, [assignmentId, exam, sendSecurityEvent, startExamRecording, stopAndUploadExamRecording]);
 

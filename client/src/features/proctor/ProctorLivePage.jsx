@@ -741,6 +741,19 @@ function FocusedMonitorPage({
                       <span className={`shrink-0 text-[10px] font-bold uppercase ${alert.severity === 'critical' ? 'text-red-600' : 'text-amber-600'}`}>{alert.severity || 'info'}</span>
                     </div>
                     <p className="mt-1 line-clamp-1 text-xs font-semibold text-slate-500">{alert.message || 'Activity detected'}</p>
+                    {alert.metadata?.evidence?.snapshotUrl ? (
+                      <div className="mt-2 overflow-hidden rounded-md border border-slate-200 bg-white">
+                        <img
+                          src={alert.metadata.evidence.snapshotUrl}
+                          alt={`${String(alert.type || 'alert').replace(/_/g, ' ')} snapshot`}
+                          className="h-24 w-full object-cover"
+                          loading="lazy"
+                        />
+                        <p className="px-2 py-1 text-[10px] font-semibold text-slate-500">
+                          Snapshot {formatDateTime(alert.metadata.evidence.capturedAt || alert.occurredAt)}
+                        </p>
+                      </div>
+                    ) : null}
                     <p className="mt-1 text-[10px] font-semibold text-slate-400">{formatDateTime(alert.occurredAt)}</p>
                   </div>
                 ))}

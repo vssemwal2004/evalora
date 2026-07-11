@@ -15,6 +15,7 @@
     "@tensorflow-models/coco-ssd": "^2.2.3",
     "@tensorflow/tfjs": "^4.22.0",
     "@tensorflow/tfjs-backend-webgl": "^4.22.0",
+    "@tesseract.js-data/eng": "1.0.0",
     "@vitejs/plugin-react": "^4.3.4",
     "@vladmandic/face-api": "^1.7.15",
     "axios": "^1.7.9",
@@ -26,6 +27,7 @@
     "react-router-dom": "^7.1.1",
     "read-excel-file": "^9.2.0",
     "socket.io-client": "^4.8.1",
+    "tesseract.js": "^7.0.0",
     "write-excel-file": "^4.1.1"
   },
   "devDependencies": {

@@ -19,8 +19,58 @@ function normalizeContentType(type) {
   return String(type || 'application/octet-stream').split(';')[0].trim().toLowerCase();
 }
 
+async function uploadIdentityThroughApi(blob, { assignmentId, filename, contentType }) {
+  try {
+    const response = await api.post('/storage/r2/upload-identity', blob, {
+      params: { assignmentId, filename },
+      headers: { 'Content-Type': contentType },
+    });
+    return response.data;
+  } catch (error) {
+    console.error('Secure identity upload failed', {
+      assignmentId,
+      filename,
+      status: error.response?.status,
+      code: error.code,
+    });
+    if (error.response) throw error;
+    const uploadError = new Error('We could not securely upload your verification photo. Check your connection, then try again.');
+    uploadError.code = 'EVIDENCE_UPLOAD_FAILED';
+    throw uploadError;
+  }
+}
+
+async function uploadEvidenceThroughApi(blob, { category, assignmentId, filename, contentType }) {
+  try {
+    const response = await api.post('/storage/r2/upload-evidence', blob, {
+      params: { category, assignmentId, filename },
+      headers: { 'Content-Type': contentType },
+    });
+    return response.data;
+  } catch (error) {
+    console.error('Secure evidence upload failed', {
+      category,
+      assignmentId,
+      filename,
+      status: error.response?.status,
+      code: error.code,
+    });
+    if (error.response) throw error;
+    const uploadError = new Error('We could not securely upload exam evidence. Check your connection, then try again.');
+    uploadError.code = 'EVIDENCE_UPLOAD_FAILED';
+    throw uploadError;
+  }
+}
+
 export async function uploadEvidenceBlob(blob, { category, assignmentId, filename }) {
   const contentType = normalizeContentType(blob.type);
+  if (category === 'identity') {
+    return uploadIdentityThroughApi(blob, { assignmentId, filename, contentType });
+  }
+  if (['snapshot', 'clip', 'recording'].includes(category)) {
+    return uploadEvidenceThroughApi(blob, { category, assignmentId, filename, contentType });
+  }
+
   let response;
   try {
     response = await api.post('/storage/r2/presign', {
@@ -33,17 +83,27 @@ export async function uploadEvidenceBlob(blob, { category, assignmentId, filenam
   } catch (error) {
     const message = error.response?.data?.message || error.message || 'Cloudflare R2 upload URL could not be created.';
     console.error('R2 presign failed', { category, assignmentId, filename, message, error });
-    throw new Error(`Cloudflare R2 is not ready: ${message}`);
+    const uploadError = new Error('We could not prepare the secure photo upload. Check your connection, then try again.');
+    uploadError.code = 'EVIDENCE_UPLOAD_FAILED';
+    throw uploadError;
   }
 
   const upload = response.data;
-  const uploadResponse = await window.fetch(upload.uploadUrl, {
-    method: 'PUT',
-    body: blob,
-    headers: {
-      'Content-Type': contentType,
-    },
-  });
+  let uploadResponse;
+  try {
+    uploadResponse = await window.fetch(upload.uploadUrl, {
+      method: 'PUT',
+      body: blob,
+      headers: {
+        'Content-Type': contentType,
+      },
+    });
+  } catch (error) {
+    console.error('Evidence upload connection failed', { category, assignmentId, filename, error });
+    const uploadError = new Error('We could not securely upload your verification photo. Check your connection, then try again.');
+    uploadError.code = 'EVIDENCE_UPLOAD_FAILED';
+    throw uploadError;
+  }
 
   if (!uploadResponse.ok) {
     const details = await uploadResponse.text().catch(() => '');
@@ -54,7 +114,9 @@ export async function uploadEvidenceBlob(blob, { category, assignmentId, filenam
       status: uploadResponse.status,
       details,
     });
-    throw new Error(`Evidence upload to Cloudflare R2 failed (${uploadResponse.status}). Check bucket CORS and token permissions.`);
+    const uploadError = new Error('Your verification photo could not be uploaded. Keep this page open and try again.');
+    uploadError.code = 'EVIDENCE_UPLOAD_FAILED';
+    throw uploadError;
   }
 
   return {

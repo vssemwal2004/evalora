@@ -15,6 +15,13 @@ const {
   examSecurityEventLimiter,
 } = require('../middleware/rateLimit');
 const { objectIdString, validateBody, validateObjectIdParams, z } = require('../middleware/validate');
+const {
+  evaluateIdentityVerification,
+  getMissingStepPrerequisites,
+  getPhaseProgress,
+  getRequiredSetupSteps,
+  getStepStatus,
+} = require('../services/examSetup.service');
 
 const router = express.Router();
 const optionalObjectIdString = z.preprocess(
@@ -22,7 +29,7 @@ const optionalObjectIdString = z.preprocess(
   objectIdString.optional()
 );
 const setupStepBodySchema = z.object({
-  key: z.enum(['verify', 'instructions', 'browser', 'camera', 'identity', 'microphone', 'fullscreen', 'final']),
+  key: z.enum(['verify', 'instructions', 'browser', 'camera', 'identity', 'location', 'microphone', 'fullscreen']),
   status: z.enum(['passed', 'failed']).optional(),
   message: z.string().trim().max(500).optional().default(''),
 });
@@ -30,7 +37,7 @@ const evidenceImageSchema = z.string().trim().max(1000_000).refine(
   (value) => /^data:image\/(jpeg|jpg|png|webp);base64,[A-Za-z0-9+/=]+$/.test(value) || /^https:\/\/.+/i.test(value),
   'Invalid image evidence payload.'
 );
-const descriptorSchema = z.array(z.coerce.number()).min(64).max(512);
+const descriptorSchema = z.array(z.coerce.number().finite()).length(128);
 const identityVerificationBodySchema = z.object({
   selfieImage: evidenceImageSchema,
   idCardImage: evidenceImageSchema,
@@ -38,10 +45,11 @@ const identityVerificationBodySchema = z.object({
   idCardStorageKey: z.string().trim().max(500).optional().default(''),
   selfieDescriptor: descriptorSchema,
   idCardDescriptor: descriptorSchema,
-  matchPercentage: z.coerce.number().min(0).max(100),
-  distance: z.coerce.number().min(0).max(2).optional(),
+  idCardOcrText: z.string().trim().max(3000).optional().default(''),
+  idCardOcrConfidence: z.coerce.number().min(0).max(100).optional().default(0),
   threshold: z.coerce.number().min(0.1).max(1.5).optional().default(0.6),
-  status: z.enum(['passed', 'failed', 'manual_review']).optional().default('manual_review'),
+  selfieSource: z.enum(['live', 'upload']).optional().default('live'),
+  idCardSource: z.enum(['live', 'upload']).optional().default('live'),
 });
 const answerBodySchema = z.object({
   questionId: objectIdString,
@@ -53,6 +61,13 @@ const batchAnswersBodySchema = z.object({
   answers: z.array(answerBodySchema).max(200, 'At most 200 answers can be saved at once.').default([]),
 });
 const validDateString = z.string().refine((value) => !Number.isNaN(new Date(value).getTime()), 'Invalid date.');
+const locationVerificationBodySchema = z.object({
+  latitude: z.coerce.number().min(-90).max(90),
+  longitude: z.coerce.number().min(-180).max(180),
+  accuracy: z.coerce.number().min(0).max(100_000),
+  permissionState: z.enum(['granted', 'prompt', 'unsupported']).optional().default('unsupported'),
+  capturedAt: validDateString.optional(),
+});
 const securityEventBodySchema = z.object({
   type: z.string().trim().min(1).max(80),
   severity: z.enum(['info', 'warning', 'critical']).optional().default('warning'),
@@ -75,13 +90,8 @@ router.use(authenticate, requireRole(ROLES.STUDENT));
 router.use('/exams/:assignmentId', validateObjectIdParams('assignmentId'));
 
 const SECURITY_HOLD_TYPES = [
-  'tab_switch',
-  'window_blur',
-  'fullscreen_exit',
-  'screenshot_attempt',
   'duplicate_tab',
-  'shortcut_attempt',
-  'idle_detected',
+  'camera_missing',
 ];
 
 function deriveOperationalStatus(assessment) {
@@ -113,23 +123,6 @@ function isSameCourse(question, assignment) {
   return courseIdMatches || courseNameMatches;
 }
 
-function getRequiredSetupSteps(assessment) {
-  const settings = assessment.settings || {};
-  const steps = ['verify', 'instructions', 'browser'];
-
-  if (settings.cameraRequired || settings.cameraMonitoring || settings.proctoringEnabled) steps.push('camera');
-  if (settings.identityVerificationRequired !== false) steps.push('identity');
-  if (settings.microphoneRequired || settings.noiseMonitoring || settings.proctoringEnabled) steps.push('microphone');
-  if (settings.fullscreenEnabled || settings.requireFullscreenBeforeStart) steps.push('fullscreen');
-
-  steps.push('final');
-  return steps;
-}
-
-function getStepStatus(attempt, key) {
-  return attempt.setupSteps.find((step) => step.key === key)?.status;
-}
-
 function serializeExam({ assignment, assessment, attempt, questionSummary }) {
   const operationalStatus = deriveOperationalStatus(assessment);
 
@@ -154,6 +147,7 @@ function serializeExam({ assignment, assessment, attempt, questionSummary }) {
     mailStatus: assignment.mailStatus,
     settings: assessment.settings || {},
     requiredSetupSteps: getRequiredSetupSteps(assessment),
+    setupProgress: getPhaseProgress(assessment, attempt),
     attempt: attempt
       ? {
           id: attempt._id,
@@ -172,6 +166,14 @@ function serializeExam({ assignment, assessment, attempt, questionSummary }) {
                 distance: attempt.identityVerification.distance,
                 threshold: attempt.identityVerification.threshold,
                 capturedAt: attempt.identityVerification.capturedAt,
+              }
+            : null,
+          locationVerification: attempt.locationVerification?.capturedAt
+            ? {
+                status: attempt.locationVerification.status,
+                accuracy: attempt.locationVerification.accuracy,
+                permissionState: attempt.locationVerification.permissionState,
+                capturedAt: attempt.locationVerification.capturedAt,
               }
             : null,
           securityHold:
@@ -237,6 +239,7 @@ async function emitProctorStudentUpdate(req, { assessment, assignment, attempt, 
           type: event.type,
           severity: event.severity,
           message: event.message,
+          metadata: event.metadata || {},
           occurredAt: event.occurredAt,
         }
       : null,
@@ -355,6 +358,20 @@ function upsertSetupStep(attempt, key, status, message) {
   });
 }
 
+function invalidateFollowingSetupSteps(attempt, assessment, key) {
+  const requiredSteps = getRequiredSetupSteps(assessment);
+  const failedIndex = requiredSteps.indexOf(key);
+  if (failedIndex < 0) return;
+
+  for (const step of attempt.setupSteps) {
+    if (requiredSteps.indexOf(step.key) > failedIndex) {
+      step.status = 'pending';
+      step.message = 'Complete the earlier security phase again.';
+      step.completedAt = undefined;
+    }
+  }
+}
+
 function validateExamCanStart(assessment, assignment, questionSummary) {
   const operationalStatus = deriveOperationalStatus(assessment);
 
@@ -435,15 +452,8 @@ function getViolationAction(settings, attempt, type) {
 
   if (autoSubmitScore > 0 && score >= autoSubmitScore) return 'autosubmit';
 
-  if (type === 'fullscreen_exit' && attempt.securitySummary.fullscreenExitCount >= Number(settings.maxFullscreenExits || 0)) {
-    return settings.fullscreenAction || 'warn';
-  }
-
-  if (['tab_switch', 'window_blur', 'duplicate_tab'].includes(type) && attempt.securitySummary.tabSwitchCount >= Number(settings.maxTabSwitches || 0)) {
-    return settings.tabSwitchAction || 'warn';
-  }
-
   if (type === 'camera_missing') return settings.cameraMissingAction || 'warn';
+  if (type === 'duplicate_tab') return 'warn';
   if (pauseScore > 0 && score >= pauseScore) return 'pause';
   if (Number(settings.maxWarningCount || 0) > 0 && attempt.securitySummary.warningCount >= Number(settings.maxWarningCount)) return 'pause';
   return 'warn';
@@ -453,7 +463,7 @@ function startSecurityHold(attempt, assessment, type, reason) {
   if (attempt.securityHold?.active) return;
 
   const now = new Date();
-  const immediateRecheck = ['fullscreen_exit', 'duplicate_tab'].includes(type);
+  const immediateRecheck = ['duplicate_tab', 'camera_missing'].includes(type);
   const graceSeconds = immediateRecheck ? 0 : 15;
   const timeoutSeconds = Math.max(Number(assessment.settings?.securityRecheckTimeoutSeconds || 120), 30);
   const graceEndsAt = new Date(now.getTime() + graceSeconds * 1000);
@@ -466,6 +476,7 @@ function startSecurityHold(attempt, assessment, type, reason) {
     detectedAt: now,
     graceEndsAt,
     recheckExpiresAt: new Date(graceEndsAt.getTime() + timeoutSeconds * 1000),
+    cameraRevalidationStatus: 'pending',
   };
 }
 
@@ -568,10 +579,79 @@ router.post('/exams/:assignmentId/setup-step', examActionLimiter, validateBody(s
       return res.status(400).json({ message: 'Invalid setup step for this assessment.' });
     }
 
+    if (status === 'passed' && ['identity', 'location'].includes(key)) {
+      return res.status(400).json({ message: `Use the dedicated ${key} verification endpoint.` });
+    }
+
+    if (status === 'passed') {
+      const missingPrerequisites = getMissingStepPrerequisites(assessment, attempt, key);
+      if (missingPrerequisites.length > 0) {
+        return res.status(409).json({
+          code: 'SETUP_SEQUENCE_REQUIRED',
+          message: `Complete earlier security checks first: ${missingPrerequisites.join(', ')}.`,
+          missingPrerequisites,
+        });
+      }
+      if (key === 'camera') {
+        invalidateFollowingSetupSteps(attempt, assessment, key);
+        attempt.identityVerification.status = 'not_started';
+      }
+    } else {
+      invalidateFollowingSetupSteps(attempt, assessment, key);
+      if (key === 'identity') attempt.identityVerification.status = 'failed';
+      if (key === 'location') attempt.locationVerification.status = 'failed';
+    }
+
     upsertSetupStep(attempt, key, status, String(req.body.message || ''));
     await attempt.save();
 
     return res.json({ attempt });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.post('/exams/:assignmentId/location-verification', examActionLimiter, validateBody(locationVerificationBodySchema), async (req, res, next) => {
+  try {
+    const found = await findStudentExam(req, req.params.assignmentId);
+    if (!found) return res.status(404).json({ message: 'Assigned exam not found.' });
+
+    const { assessment, assignment } = found;
+    const attempt = await getOrCreateAttempt(assessment, assignment);
+    const missingPrerequisites = getMissingStepPrerequisites(assessment, attempt, 'location');
+    if (missingPrerequisites.length > 0) {
+      return res.status(409).json({
+        code: 'SETUP_SEQUENCE_REQUIRED',
+        message: `Complete the environment phase first: ${missingPrerequisites.join(', ')}.`,
+        missingPrerequisites,
+      });
+    }
+
+    attempt.locationVerification = {
+      status: 'passed',
+      latitude: Number(req.body.latitude),
+      longitude: Number(req.body.longitude),
+      accuracy: Number(req.body.accuracy),
+      permissionState: req.body.permissionState,
+      capturedAt: new Date(),
+    };
+    upsertSetupStep(
+      attempt,
+      'location',
+      'passed',
+      `Location permission verified with ${Math.round(Number(req.body.accuracy))}m accuracy.`
+    );
+    await attempt.save();
+
+    return res.json({
+      attempt,
+      locationVerification: {
+        status: attempt.locationVerification.status,
+        accuracy: attempt.locationVerification.accuracy,
+        permissionState: attempt.locationVerification.permissionState,
+        capturedAt: attempt.locationVerification.capturedAt,
+      },
+    });
   } catch (error) {
     return next(error);
   }
@@ -584,26 +664,49 @@ router.post('/exams/:assignmentId/identity-verification', examActionLimiter, val
 
     const { assessment, assignment } = found;
     const attempt = await getOrCreateAttempt(assessment, assignment);
-    const status = req.body.status || 'manual_review';
+    const missingPrerequisites = getMissingStepPrerequisites(assessment, attempt, 'identity');
+    if (missingPrerequisites.length > 0) {
+      return res.status(409).json({
+        code: 'SETUP_SEQUENCE_REQUIRED',
+        message: `Complete earlier security checks first: ${missingPrerequisites.join(', ')}.`,
+        missingPrerequisites,
+      });
+    }
+
+    const comparison = evaluateIdentityVerification({
+      assignment,
+      selfieDescriptor: req.body.selfieDescriptor,
+      idCardDescriptor: req.body.idCardDescriptor,
+      threshold: req.body.threshold,
+      idCardOcrText: req.body.idCardOcrText,
+      idCardOcrConfidence: req.body.idCardOcrConfidence,
+    });
+    const { status } = comparison;
     const message =
       status === 'passed'
-        ? `Identity verification passed with ${Number(req.body.matchPercentage).toFixed(1)}% face match.`
-        : `Identity verification needs review with ${Number(req.body.matchPercentage).toFixed(1)}% face match.`;
+        ? `Identity verification passed with ${comparison.matchPercentage.toFixed(1)}% face match and matched ID text.`
+        : comparison.reason;
 
     attempt.identityVerification = {
       status,
-      matchPercentage: Number(req.body.matchPercentage || 0),
-      distance: req.body.distance === undefined ? null : Number(req.body.distance),
-      threshold: Number(req.body.threshold || 0.6),
+      matchPercentage: comparison.matchPercentage,
+      distance: comparison.distance,
+      threshold: comparison.threshold,
       selfieImage: req.body.selfieImage,
       idCardImage: req.body.idCardImage,
       selfieStorageKey: req.body.selfieStorageKey,
       idCardStorageKey: req.body.idCardStorageKey,
       selfieDescriptor: req.body.selfieDescriptor,
       idCardDescriptor: req.body.idCardDescriptor,
+      idCardOcrText: req.body.idCardOcrText,
+      idCardOcrConfidence: comparison.ocr.confidence,
+      idCardMatchedFields: comparison.ocr.matchedFields,
+      idCardMatchedNameTokens: comparison.ocr.matchedNameTokens,
+      selfieSource: req.body.selfieSource,
+      idCardSource: req.body.idCardSource,
       capturedAt: new Date(),
     };
-    upsertSetupStep(attempt, 'identity', 'passed', message);
+    upsertSetupStep(attempt, 'identity', status === 'passed' ? 'passed' : 'failed', message);
 
     const event = await AssessmentSecurityEvent.create({
       assessmentId: assessment._id,
@@ -612,13 +715,19 @@ router.post('/exams/:assignmentId/identity-verification', examActionLimiter, val
       ownerAdminId: assessment.ownerAdminId,
       type: 'identity_verification',
       severity: status === 'passed' ? 'info' : 'warning',
-      score: status === 'passed' ? 0 : 3,
+      score: status === 'passed' ? 0 : 5,
       message,
       metadata: {
         status,
-        matchPercentage: Number(req.body.matchPercentage || 0),
-        distance: req.body.distance === undefined ? null : Number(req.body.distance),
-        threshold: Number(req.body.threshold || 0.6),
+        code: comparison.code,
+        faceStatus: comparison.faceStatus,
+        matchPercentage: comparison.matchPercentage,
+        distance: comparison.distance,
+        threshold: comparison.threshold,
+        idCardOcrConfidence: comparison.ocr.confidence,
+        idCardMatchedFields: comparison.ocr.matchedFields,
+        selfieSource: req.body.selfieSource,
+        idCardSource: req.body.idCardSource,
       },
       occurredAt: new Date(),
     });
@@ -628,16 +737,20 @@ router.post('/exams/:assignmentId/identity-verification', examActionLimiter, val
     await attempt.save();
     await emitProctorStudentUpdate(req, { assessment, assignment, attempt, event });
 
-    return res.status(201).json({
+    return res.status(status === 'passed' ? 201 : 422).json({
+      code: comparison.code,
       attempt,
       identityVerification: {
         status: attempt.identityVerification.status,
         matchPercentage: attempt.identityVerification.matchPercentage,
         distance: attempt.identityVerification.distance,
         threshold: attempt.identityVerification.threshold,
+        idCardOcrConfidence: attempt.identityVerification.idCardOcrConfidence,
+        idCardMatchedFields: attempt.identityVerification.idCardMatchedFields,
         capturedAt: attempt.identityVerification.capturedAt,
       },
       event,
+      message,
     });
   } catch (error) {
     return next(error);
@@ -976,13 +1089,18 @@ router.post('/exams/:assignmentId/security-hold/recheck', examActionLimiter, val
     const failed = [];
     if (!checks.visible || !checks.focused) failed.push('exam window');
     if ((settings.fullscreenEnabled || settings.requireFullscreenBeforeStart) && !checks.fullscreen) failed.push('full screen');
-    if ((settings.cameraRequired || settings.cameraMonitoring || settings.proctoringEnabled) && !checks.camera) failed.push('camera');
+    if (!checks.camera) failed.push('camera');
     if ((settings.microphoneRequired || settings.noiseMonitoring || settings.proctoringEnabled) && !checks.microphone) failed.push('microphone');
 
     if (failed.length > 0) {
+      attempt.securityHold.cameraRevalidationStatus = checks.camera ? 'passed' : 'failed';
+      attempt.securityHold.cameraRevalidatedAt = now;
+      await attempt.save();
       return res.status(400).json({ message: `Verification failed: ${failed.join(', ')}.`, failed, securityHold: attempt.securityHold });
     }
 
+    attempt.securityHold.cameraRevalidationStatus = 'passed';
+    attempt.securityHold.cameraRevalidatedAt = now;
     releaseSecurityHold(attempt);
     attempt.lastHeartbeatAt = now;
     await attempt.save();

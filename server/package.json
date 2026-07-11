@@ -9,7 +9,7 @@
     "seed:super-admin": "node scripts/seedSuperAdmin.js",
     "security:encrypt-credentials": "node scripts/encryptCredentialPreviews.js",
     "check": "node -e \"const app = require('./src/app'); const connectDB = require('./src/config/db'); console.log(typeof app.listen, typeof connectDB);\"",
-    "test:security": "node --test test/security.test.js"
+    "test:security": "node --test test/*.test.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

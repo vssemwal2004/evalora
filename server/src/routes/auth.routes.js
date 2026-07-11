@@ -10,6 +10,7 @@ const { clearCsrfCookie, setCsrfCookie } = require('../middleware/csrf');
 const { authLoginLimiter, passwordChangeLimiter } = require('../middleware/rateLimit');
 const { validateBody, z } = require('../middleware/validate');
 const { writeAuditLog } = require('../services/audit.service');
+const { buildLoginUserQuery } = require('../services/auth.service');
 const { signAuthToken } = require('../utils/tokens');
 
 const router = express.Router();
@@ -115,15 +116,7 @@ router.post('/login', authLoginLimiter, validateBody(loginBodySchema), async (re
     }
 
     const normalizedIdentifier = String(identifier).trim().toLowerCase();
-    const user = await User.findOne({
-      $or: [
-        { email: normalizedIdentifier },
-        { loginId: identifier.trim() },
-        { loginId: normalizedIdentifier },
-        { uniqueUsername: identifier.trim() },
-        { uniqueUsername: normalizedIdentifier },
-      ],
-    }).select(SENSITIVE_USER_FIELDS);
+    const user = await User.findOne(buildLoginUserQuery(identifier)).select(SENSITIVE_USER_FIELDS);
 
     let authenticatedUser = user;
     let isValid = false;

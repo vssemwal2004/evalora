@@ -120,7 +120,53 @@ function createEvidenceUpload({ category, ownerId, assignmentId, filename, conte
   };
 }
 
+async function uploadEvidenceBuffer({ category, ownerId, assignmentId, filename, contentType, buffer }) {
+  if (!Buffer.isBuffer(buffer) || buffer.length === 0) {
+    const error = new Error('The evidence file was empty. Capture it again and try again.');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const upload = createEvidenceUpload({
+    category,
+    ownerId,
+    assignmentId,
+    filename,
+    contentType,
+    size: buffer.length,
+  });
+
+  let response;
+  try {
+    response = await fetch(upload.uploadUrl, {
+      method: 'PUT',
+      body: buffer,
+      headers: { 'Content-Type': contentType },
+    });
+  } catch (cause) {
+    console.error('Secure evidence storage connection failed.', cause?.name || 'Error');
+    const error = new Error('Secure evidence storage is temporarily unavailable. Keep this page open and try again.');
+    error.statusCode = 502;
+    throw error;
+  }
+
+  if (!response.ok) {
+    console.error('Secure evidence storage rejected an upload.', { status: response.status, category });
+    const error = new Error('Secure evidence storage could not save the file. Keep this page open and try again.');
+    error.statusCode = 502;
+    throw error;
+  }
+
+  return {
+    key: upload.key,
+    url: upload.publicUrl,
+    contentType,
+    size: buffer.length,
+  };
+}
+
 module.exports = {
   createEvidenceUpload,
   isConfigured,
+  uploadEvidenceBuffer,
 };

@@ -115,7 +115,7 @@ const permissionLabels = {
   'reports.response_log.view': 'View response log reports',
   'reports.proctoring.view': 'View proctoring reports',
   'reports.detail.view': 'View candidate detail reports',
-  'reports.recordings.view': 'View camera and screen recordings',
+  'reports.recordings.view': 'View camera recordings',
   'reports.export': 'Export reports',
   'reports.export.csv': 'Export reports as CSV',
   'reports.export.pdf': 'Export reports as PDF',

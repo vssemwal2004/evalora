@@ -136,7 +136,6 @@ function stripRecordingEvidence(candidate) {
             ...evidence,
             recordingUrl: '',
             cameraRecordingUrl: '',
-            screenRecordingUrl: '',
           },
         },
       };
@@ -1628,6 +1627,7 @@ async function loadActivityLog(req, assessmentId, options = {}) {
         severity: event.severity,
         score: event.score,
         message: event.message || 'Activity recorded.',
+        metadata: event.metadata || {},
         candidateName: assignment.name || '-',
         email: assignment.email || '',
         uniqueId: assignment.generatedExamId || assignment.applicationNumber || '',
